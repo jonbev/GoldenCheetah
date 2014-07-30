@@ -56,6 +56,7 @@
 #include "SplitActivityWizard.h"
 #include "MergeActivityWizard.h"
 #include "BatchExportDialog.h"
+#include "GenerateHeatMapDialog.h"
 #include "TwitterDialog.h"
 #include "ShareDialog.h"
 #include "TtbDialog.h"
@@ -569,6 +570,7 @@ MainWindow::MainWindow(const QDir &home)
     rideMenu->addSeparator ();
     rideMenu->addAction(tr("&Export..."), this, SLOT(exportRide()), tr("Ctrl+E"));
     rideMenu->addAction(tr("&Batch export..."), this, SLOT(exportBatch()), tr("Ctrl+B"));
+    rideMenu->addAction(tr("Create Heat Map..."), this, SLOT(generateHeatMap()), tr(""));
     rideMenu->addAction(tr("Export Metrics as CSV..."), this, SLOT(exportMetrics()), tr(""));
 #ifdef GC_HAVE_SOAP
     rideMenu->addSeparator ();
@@ -1209,6 +1211,13 @@ void
 MainWindow::exportBatch()
 {
     BatchExportDialog *d = new BatchExportDialog(currentTab->context);
+    d->exec();
+}
+
+void
+MainWindow::generateHeatMap()
+{
+    GenerateHeatMapDialog *d = new GenerateHeatMapDialog(currentTab->context);
     d->exec();
 }
 
