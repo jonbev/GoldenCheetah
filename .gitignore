@@ -14,3 +14,15 @@ lib/
 bin/
 plugins/
 resources/
+
+build.pro.user
+qwt/src/debug/
+qwt/src/release/
+src/Makefile.Debug
+src/Makefile.Release
+qwt/src/Makefile.Debug
+qwt/src/Makefile.Release
+qwt/src/object_script.libqwt.Release
+qwt/src/object_script.libqwtd.Debug
+src/object_script.GoldenCheetah.Debug
+src/object_script.GoldenCheetah.Release
