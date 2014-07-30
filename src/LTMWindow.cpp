@@ -674,9 +674,9 @@ LTMWindow::filterChanged()
     settings.measures = &measures;
 
     // if we want weeks and start is not a monday go back to the monday
-    int dow = settings.start.date().dayOfWeek();
-    if (settings.groupBy == LTM_WEEK && dow >1 && settings.start != QDateTime(QDate(), QTime(0,0)))
-        settings.start = settings.start.addDays(-1*(dow-1));
+    //int dow = settings.start.date().dayOfWeek();
+    //if (settings.groupBy == LTM_WEEK && dow >1 && settings.start != QDateTime(QDate(), QTime(0,0)))
+    //    settings.start = settings.start.addDays(-1*(dow-1));
 
     // we need to get data again and apply filter
     results.clear(); // clear any old data
