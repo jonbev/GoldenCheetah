@@ -183,10 +183,10 @@ GenerateHeatMapDialog::generateNow()
 
     // Tile size setup coverage is the amount of lon lat covered by one grid
     // x and y size are the pixel size of the grid squares
-    double coverageLon = 0.1;
-    double coverageLat = 0.1;
-    int xSize = 600;
-    int ySize = 600;
+    double coverageLon = 0.05;
+    double coverageLat = 0.05;
+    int xSize = 300;
+    int ySize = 300;
     int dm = 10; // Diameter of the heat paint brush - thickness of the line
 
     // loop through the table and export all selected
