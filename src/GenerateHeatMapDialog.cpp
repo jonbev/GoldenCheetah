@@ -79,20 +79,9 @@ GenerateHeatMapDialog::GenerateHeatMapDialog(Context *context) : QDialog(context
     // directory
     QGridLayout *grid = new QGridLayout;
 
-    selectDir = new QPushButton(tr("Browse"), this);
-    dirLabel = new QLabel (tr("Export to"), this);
-
-    // default to last used
-    QString dirDefault = appsettings->value(this, GC_BE_LASTDIR, QDir::home().absolutePath()).toString();
-    if (!QDir(dirDefault).exists()) dirDefault = QDir::home().absolutePath();
-
-    dirName = new QLabel(dirDefault, this);
     all = new QCheckBox(tr("check/uncheck all"), this);
     all->setChecked(true);
 
-    grid->addWidget(dirLabel, 1,0, Qt::AlignLeft);
-    grid->addWidget(dirName, 1,1, Qt::AlignLeft);
-    grid->addWidget(selectDir, 1,2, Qt::AlignLeft);
     grid->addWidget(all, 2,0, Qt::AlignLeft);
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 10);
@@ -115,24 +104,9 @@ GenerateHeatMapDialog::GenerateHeatMapDialog(Context *context) : QDialog(context
     exports = fails = 0;
 
     // connect signals and slots up..
-    connect(selectDir, SIGNAL(clicked()), this, SLOT(selectClicked()));
     connect(ok, SIGNAL(clicked()), this, SLOT(okClicked()));
     connect(all, SIGNAL(stateChanged(int)), this, SLOT(allClicked()));
     connect(cancel, SIGNAL(clicked()), this, SLOT(cancelClicked()));
-}
-
-void
-GenerateHeatMapDialog::selectClicked()
-{
-    QString before = dirName->text();
-    QString dir = QFileDialog::getExistingDirectory(this, tr("Select Target Directory"),
-                                                 before,
-                                                 QFileDialog::ShowDirsOnly
-                                                 | QFileDialog::DontResolveSymlinks);
-    if (dir!="") {
-        dirName->setText(dir);
-    }
-    return;
 }
 
 void
@@ -157,7 +131,6 @@ GenerateHeatMapDialog::okClicked()
         status->show();
         cancel->hide();
         ok->setText(tr("Abort"));
-        appsettings->setValue(GC_BE_LASTDIR, dirName->text());
         generateNow();
         status->setText(QString(tr("%1 rides exported, %2 failed or skipped.")).arg(exports).arg(fails));
         ok->setText(tr("Finish"));
@@ -257,7 +230,7 @@ GenerateHeatMapDialog::generateNow()
                     .arg(i.key())
                     .arg(i.value());
     }
-    QFile filehtml(dirName->text() + "/HeatMap.htm");
+    QFile filehtml(context->athlete->home.absolutePath() + "/HeatMap.htm");
     filehtml.open(QIODevice::WriteOnly | QIODevice::Text);
     QTextStream outhtml(&filehtml);
     outhtml << "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Heatmaps</title>\n";

@@ -56,7 +56,6 @@ signals:
 private slots:
     void cancelClicked();
     void okClicked();
-    void selectClicked();
     void generateNow();
     void allClicked();
 
@@ -68,9 +67,6 @@ private:
 
     QComboBox *format;
     QLabel *formatLabel;
-
-    QPushButton *selectDir;
-    QLabel *dirLabel, *dirName;
 
     QCheckBox *overwrite;
     QPushButton *cancel, *ok;
