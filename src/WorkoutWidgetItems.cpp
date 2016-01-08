@@ -45,6 +45,7 @@ WWPowerScale::paint(QPainter *painter)
     // lets get the zones, CP and PMAX
     int CP = context->athlete->zones(false)->getCP(rnum);
     int Pmax = context->athlete->zones(false)->getPmax(rnum);
+    Q_UNUSED(Pmax); // for now ........
     int numZones = context->athlete->zones(false)->numZones(rnum);
 
     QFontMetrics fontMetrics(workoutWidget()->markerFont);
@@ -108,6 +109,18 @@ WWPowerScale::paint(QPainter *painter)
                                     name);
         }
     }
+
+    // CP !
+    QPen cppen(GColor(CPLOTMARKER));
+    cppen.setStyle(Qt::DashLine);
+    painter->setPen(cppen);
+
+    double CPy = workoutWidget()->transform(0, CP).y();
+
+    // zone high
+    painter->drawLine(QPoint(workoutWidget()->canvas().x(), CPy), 
+                      QPoint(workoutWidget()->canvas().x()+workoutWidget()->canvas().width(), CPy));
+
 }
 
 WWWBalScale::WWWBalScale(WorkoutWidget *w, Context *c) : WorkoutWidgetItem(w), context(c)
@@ -273,6 +286,9 @@ WWRect::paint(QPainter *painter)
 void
 WWBlockCursor::paint(QPainter *painter)
 {
+    // if were in a selection block don't draw a cursos
+    if (workoutWidget()->selectionBlock.contains(workoutWidget()->mapFromGlobal(QCursor::pos()))) return;
+    
     // are we busy resizing and stuff and is the block cursor valid?
     if (workoutWidget()->state == WorkoutWidget::none &&
         workoutWidget()->cursorBlock != QPainterPath()) {
@@ -288,10 +304,59 @@ WWBlockCursor::paint(QPainter *painter)
         painter->setPen(GColor(CPLOTMARKER));
 
         QPointF where(workoutWidget()->cursorBlock.boundingRect().center().x()-(textBound.width()/2), 
-                      workoutWidget()->cursorBlock.boundingRect().bottom()-10); 
+                      workoutWidget()->cursorBlock.boundingRect().bottom()-10); //XXX 10 is hardcoded space from bottom
 
         painter->drawText(where, workoutWidget()->cursorBlockText);
+
+        QRect textBound2 = fontMetrics.boundingRect(workoutWidget()->cursorBlockText2);
+        QPointF where2(workoutWidget()->cursorBlock.boundingRect().center().x()-(textBound2.width()/2), 
+                      where.y()-textBound.height());  //XXX 4 is hardcoded space between labels
+
+        painter->drawText(where2, workoutWidget()->cursorBlockText2);
+
     }
+}
+
+void
+WWBlockSelection::paint(QPainter *painter)
+{
+    // draw the block selection
+    if (workoutWidget()->selectionBlock == QPainterPath()) return;
+
+    // set pen
+    painter->setPen(GColor(CPLOTMARKER));
+
+    // now draw the path
+    painter->drawPath(workoutWidget()->selectionBlock);
+
+    // and fill it
+    QColor darken = Qt::red;
+    darken.setAlpha(125);
+    painter->fillPath(workoutWidget()->selectionBlock, QBrush(darken));
+
+    // cursor block duration text
+    QFontMetrics fontMetrics(workoutWidget()->bigFont);
+    QRect textBound = fontMetrics.boundingRect(workoutWidget()->selectionBlockText);
+    painter->setFont(workoutWidget()->bigFont);
+    painter->setPen(GColor(CPLOTMARKER));
+
+    QPointF where(workoutWidget()->selectionBlock.boundingRect().center().x()-(textBound.width()/2), 
+                  workoutWidget()->selectionBlock.boundingRect().bottom()-10); //XXX 10 is hardcoded space from bottom
+
+    painter->drawText(where, workoutWidget()->selectionBlockText);
+
+    QRect textBound2 = fontMetrics.boundingRect(workoutWidget()->selectionBlockText2);
+    QPointF where2(workoutWidget()->selectionBlock.boundingRect().center().x()-(textBound2.width()/2), 
+                  where.y()-textBound.height());  //XXX 4 is hardcoded space between labels
+
+    painter->drawText(where2, workoutWidget()->selectionBlockText2);
+}
+
+// locate me on the parent widget in paint coordinates
+QRectF 
+WWBlockSelection::bounding()
+{
+    return QRectF();
 }
 
 //W'bal curve paint
@@ -340,6 +405,231 @@ WWWBLine::paint(QPainter *painter)
     }
 }
 
+//MMP Curve
+void
+WWMMPCurve::paint(QPainter *painter)
+{
+    // thin ?
+    QPen linePen(GColor(CCP));
+    linePen.setWidth(0.5);
+    painter->setPen(linePen);
+
+    // join the dots 
+    QPointF last(-1,-1);
+
+    // run through the wpBal values...
+    int secs=0;
+    foreach(int watts, workoutWidget()->mmpArray) {
+
+        // skip zero
+        if (watts == 0) { secs++; continue; }
+
+        // x and y pixel location
+        QPointF point = workoutWidget()->transform(secs,watts);
+
+        if (last.x() >= 0) painter->drawLine(last, point);
+
+        // move on
+        last = point;
+        secs++;
+
+    }
+}
+
+void
+WWSmartGuide::paint(QPainter *painter)
+{
+    QPointF tl(-1,-1);
+    QPointF br(-1,-1);
+    int selected=0;
+
+    //
+    // FIND SCOPE TO MARK GUDIES FOR
+    // 
+    // Currently we add guides when items are selected
+    // or you are dragging a block or point around
+    //
+
+    // If not dragging points or blocks just mark any selected items
+    if (workoutWidget()->state == WorkoutWidget::none) {
+
+        // get the boundary of the current selection
+        foreach(WWPoint *p, workoutWidget()->points()) {
+
+            // don't show guides whilst selecting, too noisy
+            if (!p->selected) continue;
+
+            selected++;
+
+            // top left
+            if (tl.x() == -1 || tl.x() > p->x) tl.setX(p->x);
+            if (tl.y() == -1 || tl.y() < p->y) tl.setY(p->y);
+
+            // bottom right
+            if (br.x() == -1 || br.x() < p->x) br.setX(p->x);
+            if (br.y() == -1 || br.y() > p->y) br.setY(p->y);
+        }
+    }
+
+    // if dragging a block mark it
+    if (workoutWidget()->state == WorkoutWidget::dragblock) {
+   
+        foreach(PointMemento m, workoutWidget()->cr8block) {
+
+            // how many points
+            selected ++;
+
+            // top left
+            if (tl.x() == -1 || tl.x() > m.x) tl.setX(m.x);
+            if (tl.y() == -1 || tl.y() < m.y) tl.setY(m.y);
+
+            // bottom right
+            if (br.x() == -1 || br.x() < m.x) br.setX(m.x);
+            if (br.y() == -1 || br.y() > m.y) br.setY(m.y);
+        }
+    }
+
+    // if dragging a point mark that
+    if (workoutWidget()->state == WorkoutWidget::drag && workoutWidget()->dragging) {
+
+        // how many points
+        selected=1;
+
+        tl.setX(workoutWidget()->dragging->x);
+        br.setX(workoutWidget()->dragging->x);
+        tl.setY(workoutWidget()->dragging->y);
+        br.setY(workoutWidget()->dragging->y);
+    }
+
+    // set the boundary
+    QRectF boundary (workoutWidget()->transform(tl.x(), tl.y()),
+                     workoutWidget()->transform(br.x(), br.y()));
+
+
+    QFontMetrics fontMetrics(workoutWidget()->markerFont);
+    painter->setFont(workoutWidget()->markerFont);
+
+    //
+    // X-AXIS GUIDES
+    //
+    if (selected > 0) {
+
+        // for now just paint the boundary tics on the x-axis
+        QPen linePen(GColor(CPLOTMARKER));
+        linePen.setWidthF(0);
+        painter->setPen(linePen);
+
+        QRectF bottom = workoutWidget()->bottom();
+
+        // top line width indicators
+        painter->drawLine(boundary.bottomLeft().x(), workoutWidget()->bottom().y(), 
+                          boundary.bottomLeft().x(), workoutWidget()->bottom().y()+bottom.height());
+
+        painter->drawLine(boundary.bottomRight().x(), bottom.y(), 
+                          boundary.bottomRight().x(), bottom.y()+bottom.height());
+
+        // now the text - but only if we have a gap!
+        if (br.x() > tl.x()) {
+
+            // paint time at very bottom of bottom in the middle
+            // of the elongated tic marks
+            QString text = time_to_string(br.x()-tl.x());
+            QRect bound = fontMetrics.boundingRect(text);
+            QPoint here(boundary.center().x()-(bound.width()/2), bottom.bottom());
+
+            painter->drawText(here, text);
+        }
+
+        // find next and previous points, so we can mark them too
+        // this is useful when shifting left and right
+        int prev=-1, next=-1;
+        for(int i=0; i < workoutWidget()->points().count(); i++) {
+            WWPoint *p = workoutWidget()->points()[i];
+            if (p->x < tl.x()) prev=i; // to left
+            if (p->x > br.x()) {
+                next=i;
+                break;
+            }
+        }
+
+        // in seconds
+        int left = prev >= 0 ? workoutWidget()->points()[prev]->x : 0;
+        int right = next >= 0 ? workoutWidget()->points()[next]->x : workoutWidget()->maxX();
+
+        // in plot coordinates
+        QPointF leftpx = workoutWidget()->transform(left,0);
+        QPointF rightpx = workoutWidget()->transform(right,0);
+        leftpx.setY(bottom.y());
+        rightpx.setY(bottom.y());
+
+        // left indicator
+        painter->drawLine(leftpx, leftpx + QPointF(0, bottom.height()));
+        painter->drawLine(rightpx, rightpx + QPointF(0, bottom.height()));
+
+        // now the left text - but only if we have a gap!
+        if (left < tl.x()) {
+
+            // paint time at very bottom of bottom in the middle
+            // of the elongated tic marks
+            QString text = time_to_string(tl.x() - left);
+            QRect bound = fontMetrics.boundingRect(text);
+            QPointF here(leftpx.x() + ((boundary.left() - leftpx.x())/2) - (bound.width()/2), bottom.bottom());
+
+            painter->drawText(here, text);
+        }
+
+        // now the right text - but only if we have a gap!
+        if (right > br.x()) {
+
+            // paint time at very bottom of bottom in the middle
+            // of the elongated tic marks
+            QString text = time_to_string(right - br.x());
+            QRect bound = fontMetrics.boundingRect(text);
+            QPointF here(boundary.right() + ((rightpx.x()-boundary.right())/2) - (bound.width()/2), bottom.bottom());
+            painter->drawText(here, text);
+        }
+
+#if 0 // doesn't add much
+        // side line width indicators
+        painter->drawLine(boundary.topLeft()-QPointF(10,0), boundary.topLeft()-QPointF(30,0));
+        painter->drawLine(boundary.bottomLeft()-QPointF(10,0), boundary.bottomLeft()-QPointF(30,0));
+        painter->drawLine(boundary.bottomLeft()-QPointF(20,0), boundary.topLeft()-QPointF(20,0));
+#endif
+    }
+
+    //
+    // Y-AXIS GUIDES
+    //
+    if (selected > 0) {
+
+        // for now just paint the boundary tics on the y-axis
+        QPen linePen(GColor(CPLOTMARKER));
+        linePen.setWidthF(0);
+        painter->setPen(linePen);
+
+        // top line width indicators
+        painter->drawLine(workoutWidget()->left().left(), boundary.topRight().y(),
+                          workoutWidget()->left().right(), boundary.topRight().y());
+
+        painter->drawLine(workoutWidget()->left().left(), boundary.bottomLeft().y(),
+                          workoutWidget()->left().right(), boundary.bottomLeft().y());
+
+
+        // now the texts
+        // paint the bottom value
+        QString text = QString("%1w").arg(double(tl.y()), 0, 'f', 0);
+        QRect bound = fontMetrics.boundingRect(text);
+        painter->drawText(workoutWidget()->left().left(), boundary.top()-SPACING, text);
+        if (br.y() < tl.y()) {
+
+            // paint the bottom value UNDERNEATH the line, just in case they are really close!
+            text = QString("%1w").arg(double(br.y()), 0, 'f', 0);
+            bound = fontMetrics.boundingRect(text);
+            painter->drawText(workoutWidget()->left().left(), boundary.bottom()+SPACING+fontMetrics.ascent(), text);
+        }
+    }
+}
+
 //
 // COMMANDS
 //
@@ -371,6 +661,41 @@ CreatePointCommand::redo()
         workoutWidget()->points().append(p);
     else
         workoutWidget()->points().insert(index, p);
+}
+
+// create a block
+CreateBlockCommand::CreateBlockCommand(WorkoutWidget *w, QList<PointMemento>&points)
+   : WorkoutWidgetCommand(w), points(points) { }
+
+// undo create block
+void
+CreateBlockCommand::undo()
+{
+    // delete the points in reverse
+    for (int i=points.count()-1; i>=0; i--) {
+        WWPoint *p = NULL;
+        if (points[i].index >= 0) p = workoutWidget()->points().takeAt(points[i].index);
+        else p = workoutWidget()->points().takeAt(workoutWidget()->points().count()-1);
+        delete p;
+    }
+}
+
+// do it again
+void
+CreateBlockCommand::redo()
+{
+    // add the points forward
+    foreach(PointMemento m, points) {
+
+        // create a new WWPoint
+        WWPoint *p = new WWPoint(workoutWidget(), m.x,m.y, false);
+
+        // -1 means append
+        if (m.index < 0)
+            workoutWidget()->points().append(p);
+        else
+            workoutWidget()->points().insert(m.index, p);
+        }
 }
 
 MovePointsCommand::MovePointsCommand(WorkoutWidget *w, QList<PointMemento> before, QList<PointMemento> after)

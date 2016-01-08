@@ -802,8 +802,8 @@ ComparePane::dropEvent(QDropEvent *event)
                         // add to the counts - first is always used as default
                         for(int i=0; i<newOnes[0].sourceContext->athlete->seasons->seasons.count(); i++) {
                             Season current = newOnes[0].sourceContext->athlete->seasons->seasons[i];
-                            if (interval->rideItem()->dateTime.date() >= current.start &&
-                                interval->rideItem()->dateTime.date() <= current.end) {
+                            if (interval->rideItem()->dateTime.date() >= current.getStart() &&
+                                interval->rideItem()->dateTime.date() <= current.getEnd()) {
                                 seasonCount[i]++;
                             }
                         }
@@ -840,8 +840,8 @@ ComparePane::dropEvent(QDropEvent *event)
                         if (matched->rideItem()->dateTime == newOnes[0].data->startTime()) continue;
 
                         // add each one
-                        if (matched->rideItem()->dateTime.date() >= want.start &&
-                            matched->rideItem()->dateTime.date() <= want.end) {
+                        if (matched->rideItem()->dateTime.date() >= want.getStart() &&
+                            matched->rideItem()->dateTime.date() <= want.getEnd()) {
 
                             // create a new interval for this one
                             CompareInterval add;
@@ -967,8 +967,13 @@ ComparePane::dropEvent(QDropEvent *event)
             stream >> add.end;
             stream >> add.days;
 
-            // for now the specification is just a date range
+            // The specification is a date range
             add.specification.setDateRange(DateRange(add.start,add.end));
+            // Plus the active filters in the creation context
+            FilterSet fs;
+            fs.addFilter(context->isfiltered, context->filters);
+            fs.addFilter(context->ishomefiltered, context->homeFilters);
+            add.specification.setFilterSet(fs);
 
             // just use standard colors and cycle round
             // we will of course repeat, but the user can
@@ -1016,7 +1021,7 @@ RouteDropDialog::RouteDropDialog(QWidget *parent, Context *context, QString segm
     // add seasons to the selector
     for(int i=0; i<seasonCount.count(); i++) {
         if (seasonCount[i] > 1) {
-            seasonSelector->addItem(QString("%1 (%2)").arg(context->athlete->seasons->seasons[i].name)
+            seasonSelector->addItem(QString("%1 (%2)").arg(context->athlete->seasons->seasons[i].getName())
                                                       .arg(seasonCount[i]), i);
         }
     }

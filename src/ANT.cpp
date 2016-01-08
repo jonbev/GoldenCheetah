@@ -842,6 +842,10 @@ ANT::slotStopBroadcastTimer(int channel) // timer
 
     //qDebug()<<"ANT::slotStopTimer req from channel "<<channel;
 
+    // disconnect the slot, else we duplicate signals on subsequent sessions
+    disconnect(antChannel[channel]->channelTimer, SIGNAL(timeout()), this, SLOT(slotControlTimerEvent()));
+
+
     // stop the broadcast timer..
     antChannel[channel]->channelTimer->stop();
 }
@@ -867,6 +871,11 @@ ANT::sendMessage(ANTMessage m) {
 //fprintf(stderr, ">> send: ");
 //for(int i=0; i<m.length+3; i++) fprintf(stderr, "%02x ", m.data[i]);
 //fprintf(stderr, "\n");
+
+    struct timeval timestamp;
+    get_timeofday (&timestamp);
+    unsigned char RS='S';
+    emit sentAntMessage(RS, m, timestamp);
 
     rawWrite((uint8_t*)m.data, m.length);
 
@@ -948,7 +957,8 @@ ANT::processMessage(void) {
 
     struct timeval timestamp;
     get_timeofday (&timestamp);
-    emit receivedAntMessage(m, timestamp);
+    unsigned char RS = 'R';
+    emit receivedAntMessage(RS, m, timestamp);
 
     switch (rxMessage[ANT_OFFSET_ID]) {
         case ANT_NOTIF_STARTUP:

@@ -36,6 +36,9 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     // the workout scene
     workout = new WorkoutWidget(this, context);
 
+    // paint the W'bal curve
+    mmp = new WWMMPCurve(workout);
+
     // add the power and W'bal scale
     powerscale = new WWPowerScale(workout, context);
     wbalscale = new WWWBalScale(workout, context);
@@ -46,11 +49,17 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     // block cursos
     bcursor = new WWBlockCursor(workout);
 
+    // block selection
+    brect = new WWBlockSelection(workout);
+
     // paint the W'bal curve
     wbline = new WWWBLine(workout, context);
 
     // selection tool
     rect = new WWRect(workout);
+
+    // guides always on top!
+    guide = new WWSmartGuide(workout);
 
     // setup the toolbar
     toolbar = new QToolBar(this);
@@ -93,6 +102,29 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     selectAct = new QAction(selectIcon, tr("Select"), this);
     connect(selectAct, SIGNAL(triggered()), this, SLOT(selectMode()));
     toolbar->addAction(selectAct);
+
+    selectAct->setEnabled(true);
+    drawAct->setEnabled(false);
+
+    toolbar->addSeparator();
+
+    QIcon cutIcon(":images/toolbar/cut.png");
+    cutAct = new QAction(cutIcon, tr("Cut"), this);
+    cutAct->setEnabled(true);
+    toolbar->addAction(cutAct);
+    connect(cutAct, SIGNAL(triggered()), workout, SLOT(cut()));
+
+    QIcon copyIcon(":images/toolbar/copy.png");
+    copyAct = new QAction(copyIcon, tr("Copy"), this);
+    copyAct->setEnabled(true);
+    toolbar->addAction(copyAct);
+    connect(copyAct, SIGNAL(triggered()), workout, SLOT(copy()));
+
+    QIcon pasteIcon(":images/toolbar/paste.png");
+    pasteAct = new QAction(pasteIcon, tr("Paste"), this);
+    pasteAct->setEnabled(false);
+    toolbar->addAction(pasteAct);
+    connect(pasteAct, SIGNAL(triggered()), workout, SLOT(paste()));
 
     // stretch the labels to the right hand side
     QWidget *empty = new QWidget(this);
@@ -163,11 +195,15 @@ void
 WorkoutWindow::drawMode()
 {
     draw = true;
+    drawAct->setEnabled(false);
+    selectAct->setEnabled(true);
 }
 
 void
 WorkoutWindow::selectMode()
 {
     draw = false;
+    drawAct->setEnabled(true);
+    selectAct->setEnabled(false);
 }
 

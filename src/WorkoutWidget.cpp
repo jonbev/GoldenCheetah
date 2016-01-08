@@ -35,7 +35,7 @@
 static const double IHEIGHT = 10;
 static const double THEIGHT = 25;
 static const double BHEIGHT = 35;
-static const double LWIDTH = 55;
+static const double LWIDTH = 65;
 static const double RWIDTH = 35;
 
 // axis tic marks
@@ -77,6 +77,60 @@ WorkoutWidget::timeout()
     eventFilter(this, &timer);
 }
 
+
+// Inbound events are processed through a "state machine" that reacts
+// to each event depending upon the current state.
+//
+// Since there are only a handful of states and the transitions are
+// not complex this is performed using basic if/else clauses rather
+// than an FSM.
+//
+// The state transitions are complex enough to need documenting:
+//
+//
+// STATE MACHINE
+//
+// # EVENT              STATE       ACTION                              NEXT STATE
+// - --------------     ------      ---------------                     ----------
+// 1 mouse move         none        hover/unhover point/block           none
+//                      drag        move point around                   drag
+//                      dragblock   move block around                   dragblock
+//                      rect        resize and scan for selections      rect
+//                      create      add point and move it               drag
+//
+// 2 mouse click        none        hovering? drag point                drag
+//   not shifted        none        not hovering? set to create         create
+//
+// 3 mouse release      drag        unselect                            none
+//                      rect        none                                none
+//                      create      create point                        none
+//                      dragblock   create block                        none
+//
+// 4 mouse timeout      create      create block                        dragblock
+//                      drag        ignore                              drag
+//
+//
+// 5 mouse wheel        none        rescale selectes/all                none
+//   up and down        drag        ignore                              drag
+//
+//
+// 6 mouse click        none        hovering? select point              none
+//   shifted            none        not hovering? begin select          rect
+//
+//
+// 7 key press          any         ESC clear selection                 unchanged
+//                      any         ^Z undo, ^Y redo ^X cut             unchanged
+//                      any         ^A select all
+//                      any         cursors move selected               unchanged
+//                      any         DEL delete selected                 unchanged
+//
+//
+// 8 mouse enter        any         grab keyboard focus                 unchanged
+//
+// 9 screen resize      any         recalculate geometry objects        unchanged
+//                                  e.g. selection/cursor Block
+//
+
 bool
 WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
 {
@@ -95,44 +149,6 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
     bool updateNeeded=false;
 
     //
-    // STATE MACHINE [no edit mode or selection mode yet]
-    //
-    //   EVENT              STATE       ACTION                              NEXT STATE
-    //   --------------     ------      ---------------                     ----------
-    // 1 mouse move         none        hover/unhover point/block           none
-    //                      drag        move point around                   drag
-    //                      rect        resize and scan for selections      rect
-    //
-    // 2 mouse click        none        hovering? drag point                drag
-    //   not shifted        none        not hovering? create                drag
-    //
-    // 3 mouse release      drag        unselect                            none
-    //                      rect        none                                none
-    //
-    // 4 mouse timeout      drag        no move? click-hold                 none
-    //   [not active yet]   drag        moved? ignore                       drag
-    //
-    //
-    // 5 mouse wheel        none        rescale selectes/all                none
-    //   up and down        drag        ignore                              drag
-    //
-    //
-    // 6 mouse click        none        hovering? select point              none
-    //   shifted            none        not hovering? begin select          rect
-    //
-    //
-    // 7 key press          any         ESC clear selection                 unchanged
-    //                      any         ^Z undo, ^Y redo                    unchanged
-    //                      any         cursors move selected               unchanged
-    //                      any         DEL delete selected                 unchanged
-    //
-    //
-    // 8 mouse enter        any         grab keyboard focus                 unchanged
-    //
-    //
-    //
-
-    //
     // 1 MOUSE MOVE [we always repaint]
     //
     if (event->type() == QEvent::MouseMove) {
@@ -144,6 +160,7 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
         parent->xlabel->setText(time_to_string(v.x()));
         parent->ylabel->setText(QString("%1w").arg(v.y()));
 
+        // STATE: NONE
         if (state == none) {
 
             // if we're not in any particular state then just
@@ -169,6 +186,19 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
                 }
             }
 
+        // STATE: CREATE
+        } else if (state == create) {
+
+            // moved before timeout on create
+            updateNeeded = createPoint(p);
+
+            // now get ready to drag
+            state = drag;
+
+            // recompute metrics
+            recompute();
+
+        // STATE: DRAG
         } else if (state == drag) {
 
             // we're dragging this point around, get on and
@@ -179,11 +209,21 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
                 // this may possibly be too expensive
                 // on slower hardware?
                 recompute();
+
             } else {
                 // not possible?
                 state = none;
                 qDebug()<<"WW FSM: drag state dragging=NULL";
             }
+
+        // STATE: RECT
+        } else if (state == dragblock) {
+
+            // move it
+            updateNeeded = moveBlock(p);
+
+            // we moved the block
+            recompute();
 
         } else if (state == rect) {
 
@@ -206,6 +246,7 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
         // if press shift in select -> draw
         if (parent->draw == false) kmod ^= Qt::ShiftModifier;
 
+        // STATE: NONE
         if (state == none && canvas().contains(p)) {
 
             // either select existing to drag
@@ -251,11 +292,9 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
                     updateNeeded = true;
  
                 } else {
-                    // UNSHIFTED CREATE A POINT
-                    updateNeeded = createPoint(p);
 
-                    // recompute metrics
-                    recompute();
+                    // UNSHIFTED CREATE A POINT
+                    state = create;
 
                     // but we may press and hold for a snip
                     // so lets set the timer and remember
@@ -272,7 +311,7 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
     //
     if (event->type() == QEvent::MouseButtonRelease) {
 
-        // DRAGGING
+        // STATE: DRAG
         if (state == drag && dragging) {
 
             // create command to reflect the drag, but only
@@ -284,10 +323,27 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
             recompute();
         }
 
-        // SELECTING ENDS [so turn selecting -> selected]
+        // STATE: DRAG BLOCK
+        if (state == dragblock && cr8block.count()) {
+            new CreateBlockCommand(this, cr8block);
+
+            // now recompute
+            recompute();
+        }
+
+        // STATE: RECT
         if (state == rect) {
             selectedPoints();
             onRect = atRect = QPointF(-1,-1);
+
+        // STATE: CREATE
+        } else if (state == create) {
+
+            // moved before timeout on create
+            updateNeeded = createPoint(p);
+
+            // recompute metrics
+            recompute();
         }
 
         state = none;
@@ -299,10 +355,23 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
     // 4. MOUSE TIMEOUT [click and hold]
     //
     if (event->type() == QEvent::Timer) {
-        if (state == drag && onCreate == p) {
 
-            // TODO .. click and hold ..
+        // STATE: CREATE
+        if (state == create && onCreate == p) {
+
+            // if we are still on state create from initial click
+            // then we can create, otherwise just ignore
+
+            // create a block
+            updateNeeded = createBlock(p);
+
+            // recompute metrics
+            recompute();
+
+            // set state to dragblock
+            state = dragblock;
         }
+
     }
 
     //
@@ -310,7 +379,7 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
     //
     if (event->type() == QEvent::Wheel) {
 
-        // not for drag state, but everything else is fine
+        // STATE: NONE
         if (state == none) {
             QWheelEvent *w = static_cast<QWheelEvent*>(event);
 #if QT_VERSION >= 0x050000
@@ -326,9 +395,11 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
     }
 
     //
-    // 6. KEYPRESS
+    // 7. KEYPRESS
     //
     if (event->type() == QEvent::KeyPress) {
+
+        // STATE: ANY (!)
 
         // we care about cmd / ctrl
         Qt::KeyboardModifiers kmod = static_cast<QInputEvent*>(event)->modifiers();
@@ -346,6 +417,12 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
 
         case Qt::Key_Escape:
             updateNeeded=selectClear();
+            break;
+
+        case Qt::Key_A:
+            if (ctrl) {
+                updateNeeded=selectAll();
+            }
             break;
 
         case Qt::Key_Y:
@@ -373,15 +450,25 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
     }
 
     //
-    // Mouse enters
+    // 8. MOUSE ENTERS
     //
     if (event->type() == QEvent::Enter) {
 
-        // grab focus if we don't have it
+        // STATE: ANY
         if (!hasFocus()) {
             setFocus(Qt::MouseFocusReason);
         }
     }
+
+    //
+    // 9. RESIZE EVENT
+    //
+    if (event->type() == QEvent::Resize) {
+
+        // we need to update!
+        updateNeeded = true;
+    }
+
 
     // ALL DONE
 
@@ -407,6 +494,65 @@ WorkoutWidget::setBlockCursor()
     // where is the mouse?
     QPoint c = mapFromGlobal(QCursor::pos());
 
+    //
+    // SELECTION BLOCK - block created by selecting points
+    //
+
+    // lets set the selection block first, coz if the cursor
+    // first and last index of selected items
+    int begin=-1, end=-1;
+    for(int i=0; i<points_.count(); i++) {
+        if (points_[i]->selected) {
+            if (begin == -1) begin = i;
+            end = i;
+        }
+    }
+
+    // if we need a path, lets create one
+    if (begin >=0 && end >= 0 && points_[begin]->x < points_[end]->x) {
+
+        // accumalate joules and time
+        double joules=0;
+        double secs=0;
+
+        // create a painterpath for all the selected blocks
+        QPointF firstp = transform(points_[begin]->x, 0);
+        QPainterPath block(firstp); // origin
+        for (int i=begin; i <= end; i++) {
+
+            // accumalate
+            if (i != begin) {
+                double duration = points_[i]->x - points_[i-1]->x;
+                joules += (points_[i]->y + points_[i-1]->y) / 2 * duration;
+                secs += duration;
+            }
+
+            QPointF here = transform(points_[i]->x, points_[i]->y);
+            block.lineTo(here);
+        }
+
+        // and back again
+        QPointF lastp = transform(points_[end]->x, 0);
+        block.lineTo(lastp);
+        block.lineTo(firstp);
+
+        // done
+        selectionBlock = block;
+
+        // average power
+        selectionBlockText2 = QString("%1w").arg(joules/secs, 0, 'f', 0);
+        selectionBlockText = time_to_string(secs);
+
+    } else {
+
+        selectionBlock = QPainterPath();
+        selectionBlockText = selectionBlockText2 = "";
+    }
+
+    //
+    // CURSOR BLOCK -- HOVER BLOCK AS WE MOVE MOUSE
+    //
+
     // not on canvas?
     if (!canvas().contains(c)) {
         if (cursorBlock != QPainterPath()) {
@@ -419,6 +565,7 @@ WorkoutWidget::setBlockCursor()
     bool returning=false;
     QPointF last(0,0);
     int lastx=0;
+    int lasty=0;
 
     foreach(WWPoint *p, points_) {
 
@@ -444,6 +591,7 @@ WorkoutWidget::setBlockCursor()
                 if (cursorBlock != block) {
                     cursorBlock = block;
                     cursorBlockText = time_to_string(p->x - lastx);
+                    cursorBlockText2= QString("%1w").arg(double(lasty + ((p->y-lasty)/2)), 0, 'f', 0);
                     returning = true;
                 }
             } else if (cursorBlock != QPainterPath()) {
@@ -458,6 +606,7 @@ WorkoutWidget::setBlockCursor()
         // moving on
         last = dot;
         lastx = p->x;
+        lasty = p->y;
     }
     return returning;
 }
@@ -669,6 +818,208 @@ WorkoutWidget::createPoint(QPoint p)
 }
 
 bool
+WorkoutWidget::moveBlock(QPoint p)
+{
+    // we are drag creating blocks
+    // Remove any that might be there
+    // delete the points in reverse
+    for (int i=cr8block.count()-1; i>=0; i--) {
+        WWPoint *p = NULL;
+        if (cr8block[i].index >= 0) p = points_.takeAt(cr8block[i].index);
+        else p = points_.takeAt(points_.count()-1);
+        delete p;
+    }
+
+    // stop these cr8block
+    cr8block.clear();
+
+    // now create again
+    createBlock(p);
+
+    // refresh
+    return true;
+}
+
+bool
+WorkoutWidget::createBlock(QPoint p)
+{
+    // just in case
+    cr8block.clear();
+
+    // if between points we INSERT, if at the end
+    // we APPEND
+    WWPoint *add;
+
+    // add a point!
+    QPointF to = reverseTransform(p.x(), p.y());
+    QList<WWPoint *> adding;
+
+    // nothing there yet, create first flat block
+    if (points_.count() == 0) {
+
+        //
+        // Empty workout so create a single block starting from x=0
+        //
+        add = new WWPoint(this, 0, to.y());
+        adding << add;
+        cr8block << PointMemento(add->x, add->y, -1);
+
+        add = new WWPoint(this, to.x(), to.y());
+        adding << add;
+        cr8block << PointMemento(add->x, add->y, -1);
+
+    } else {
+
+        // appending ?
+        if (points_.last()->x < to.x()) {
+
+            //
+            // Append a block accounting for trailing end of workout
+            //
+
+            // we should really just add two points as the last
+            // point will be our 'bottom left' (forgetting for a
+            // moment that we go below or above).
+            //
+            // but we will need to add 4 points not 2 if
+            // a) we are above the last point and it is directly
+            //    below the previous point (i.e. vertical drop)
+            // b) we are below the last point and it is directly
+            //    above the previous point (i.e. vertical raise
+            //
+            // So lets work out what the last point is doing
+            enum { notvert, down, up } direction = notvert;
+            WWPoint *last = points_.last();
+            if (points_.count() > 1) {
+
+                // WEIRD: using i as temp variable to workaround weird
+                // macro expansion issue in qglobal.h (!!)
+                unsigned int i = points_.count(); i -=2;
+                WWPoint *prev = points_[i];
+
+                if (last->x == prev->x) {
+                    if (last->y > prev->y) direction = up;
+                    if (last->y < prev->y) direction = down;
+                }
+            }
+
+            switch(direction) {
+
+                case notvert:
+                    // not vert just add 2 points
+                    add = new WWPoint(this, last->x, to.y());
+                    adding << add;
+                    cr8block << PointMemento(add->x, add->y, -1);
+                    add = new WWPoint(this, to.x(), to.y());
+                    adding << add;
+                    cr8block << PointMemento(add->x, add->y, -1);
+                    break;
+
+                default:
+                case down:
+                case up:
+                    // add a right angle, since that is
+                    // consistent to what they have
+                    add = new WWPoint(this, to.x(), last->y);
+                    adding << add;
+                    cr8block << PointMemento(add->x, add->y, -1);
+                    add = new WWPoint(this, to.x(), to.y());
+                    adding << add;
+                    cr8block << PointMemento(add->x, add->y, -1);
+
+                    break;
+            }
+
+        } else {
+
+            //
+            // Insert a block between points and handle slopes gracefully
+            //
+
+            // we are between two points, so the point that
+            // was clicked by the user is the MIDDLE of the block
+            int prev=-1, next=-1;
+            for(int i=0; i < points_.count(); i++) {
+                WWPoint *p = points_[i];
+                if (p->x < to.x()) prev=i; // to left
+                if (p->x >= to.x()) {
+                    next=i;
+                    break;
+                }
+            }
+
+            // not between?
+            if (prev == -1 || next == -1 || prev == next)  return false;
+
+            // directly below?
+            if (points_[prev]->x == to.x() || points_[next]->x == to.x()) return false;
+
+            // it will be as wide as the distance from the nearest
+            // point divided by 1.5 (1width space, 1width / 2 for centre)
+            int left = (to.x() - points_[prev]->x);
+            int right = (points_[next]->x - to.x());
+            int width = double(left > right ? right : left) / 1.5;
+
+            // now we know the width we can just add four points
+            int index=next;
+
+            // if prev and next are above/below each other then
+            // we need to account for that when placing the bottom
+            // if the block - ie. place it on a slope
+            double ratio = double(points_[next]->y - points_[prev]->y)
+                           / double(points_[next]->x - points_[prev]->x);
+
+            // horizontal gap between prev point and lhs and rhs
+            double lwidth = to.x() - (width/2) - points_[prev]->x;
+            double rwidth = to.x() + (width/2) - points_[prev]->x;
+
+            // bottom left
+            add = new WWPoint(this, to.x()-(width/2), 
+                                    points_[prev]->y + (lwidth * ratio),
+                                    false);
+            adding << add;
+            cr8block << PointMemento(add->x, add->y, index);
+            points_.insert(index++, add);
+
+            // top left
+            add = new WWPoint(this, to.x()-(width/2), to.y(), false);
+            adding << add;
+            cr8block << PointMemento(add->x, add->y, index);
+            points_.insert(index++, add);
+
+            // top right
+            add = new WWPoint(this, to.x()+(width/2), to.y(), false);
+            adding << add;
+            cr8block << PointMemento(add->x, add->y, index);
+            points_.insert(index++, add);
+
+            // bottom right
+            add = new WWPoint(this, to.x()+(width/2), 
+                                    points_[prev]->y + (rwidth * ratio),
+                                    false);
+            adding << add;
+            cr8block << PointMemento(add->x, add->y, index);
+            points_.insert(index++, add);
+
+        }
+    }
+
+    // did we create any
+    if (cr8block.count()) {
+
+        // highlight were we align.
+        foreach(WWPoint *point, points_) {
+            if (adding.contains(point)) continue;
+
+            point->hover=false;
+            if (doubles_equal(point->y, to.y())) point->hover = true;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool
 WorkoutWidget::scale(QPoint p)
 {
     // scale selected (all at present) points
@@ -707,6 +1058,20 @@ WorkoutWidget::deleteSelected()
     new DeleteWPointsCommand(this, list);
 
     return true;
+}
+
+bool
+WorkoutWidget::selectAll()
+{
+    bool selected=false;
+
+    foreach(WWPoint *p, points_) {
+
+        // if not selected, select it
+        if (p->selected==false) 
+            p->selected=selected=true;
+    }
+    return selected;
 }
 
 bool
@@ -766,6 +1131,8 @@ WorkoutWidget::ergFileSelected(ErgFile *ergFile)
     stackptr = 0;
     parent->undoAct->setEnabled(false);
     parent->redoAct->setEnabled(false);
+    cursorBlock = selectionBlock = QPainterPath();
+    cursorBlockText = selectionBlockText = cursorBlockText2 = selectionBlockText2 = "";
     //XXX consider refactoring this !!! XXX
 
     // wipe out points
@@ -823,8 +1190,9 @@ WorkoutWidget::recompute()
                         context->athlete->zones(false)->useCPforFTPSetting(), 0).toInt() == 0);
     if (useCPForFTP) FTP=CP;
 
-    // compute the metrics based upon the data...
-    QVector<int> wattsArray;
+    // truncate
+    wattsArray.resize(0);
+    mmpArray.resize(0);
 
     // running time and watts for interpolating
     int ctime = 0;
@@ -905,8 +1273,7 @@ WorkoutWidget::recompute()
     //
     // MEAN MAX [works but need to think about UI]
     //
-    //QVector<int>mmpArray;
-    //RideFileCache::fastSearch(wattsArray, mmpArray);
+    RideFileCache::fastSearch(wattsArray, mmpArray);
     //qDebug()<<"RECOMPUTE:"<<timer.elapsed()<<"ms"<<wattsArray.count()<<"samples";
 }
 
@@ -1024,9 +1391,8 @@ WorkoutWidget::paintEvent(QPaintEvent*)
             painter.setPen(markerPen);
 
             QString label = QString("%1w").arg(i);
-            QRect bound = fontMetrics.boundingRect(label);
             painter.drawText(QPoint(canvas().left()+SPACING,
-                                    y+bound.height()), // we use ascent not height to line up numbers
+                                    y+(fontMetrics.ascent()/2)), // we use ascent not height to line up numbers
                                     label);
 
 #if 0       // ONLY SHOW GRIDLINES FROM POWERSCALE
@@ -1201,4 +1567,22 @@ WorkoutWidget::undo()
 
     // update
     update();
+}
+
+void
+WorkoutWidget::cut()
+{
+//qDebug()<<"cut";
+}
+
+void 
+WorkoutWidget::copy()
+{
+//qDebug()<<"copy";
+}
+
+void
+WorkoutWidget::paste()
+{
+//qDebug()<<"paste";
 }

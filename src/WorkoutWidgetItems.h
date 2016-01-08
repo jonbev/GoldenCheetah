@@ -38,6 +38,9 @@
 #define GCWW_WBLINE    5
 #define GCWW_RECT      6 // selection rectangle
 #define GCWW_BCURSOR   7 // interval "block" cursor
+#define GCWW_BRECT     8 // block selection
+#define GCWW_MMPCURVE  9
+#define GCWW_SGUIDE    10 // smart guides appear as we drag
 
 //
 // ITEMS
@@ -78,6 +81,22 @@ class WWWBalScale : public WorkoutWidgetItem {
     private:
 
         Context *context; // for athlete zones etc
+};
+
+class WWMMPCurve : public WorkoutWidgetItem {
+
+    public:
+
+        WWMMPCurve(WorkoutWidget *w) : WorkoutWidgetItem(w) { w->addItem(this); }
+
+        // Reimplement in children
+        int type() { return GCWW_MMPCURVE; }
+
+        void paint(QPainter *painter);
+
+        // locate me on the parent widget in paint coordinates
+        QRectF bounding() { return workoutWidget()->canvas(); }
+
 };
 
 // is a point, can be manipulated ...
@@ -145,6 +164,25 @@ class WWRect : public WorkoutWidgetItem {
 
 };
 
+// flash up guide lines when things align when the user is creating
+// moving or dragging points or blocks around
+class WWSmartGuide : public WorkoutWidgetItem {
+
+    public: 
+
+        WWSmartGuide(WorkoutWidget *w) : WorkoutWidgetItem(w) { w->addItem(this); }
+
+        // Reimplement in children
+        int type() { return GCWW_SGUIDE; }
+
+        void paint(QPainter *painter);
+
+        // locate me on the parent widget in paint coordinates
+        // should not be selectable (!!)
+        QRectF bounding() { return QRectF(); }
+};
+
+// highlight as we hover over blocks
 class WWBlockCursor : public WorkoutWidgetItem {
 
     public:
@@ -160,6 +198,24 @@ class WWBlockCursor : public WorkoutWidgetItem {
         QRectF bounding() { return workoutWidget()->cursorBlock.boundingRect(); }
 
     private:
+};
+
+class WWBlockSelection : public WorkoutWidgetItem {
+
+    public:
+
+        WWBlockSelection(WorkoutWidget *w) : WorkoutWidgetItem(w) { w->addItem(this); }
+
+        // Reimplement in children
+        int type() { return GCWW_BRECT; }
+
+        void paint(QPainter *painter);
+
+        // locate me on the parent widget in paint coordinates
+        QRectF bounding();
+
+    private:
+        Context *context;
 };
 
 // draws the W'bal curve
@@ -185,15 +241,6 @@ class WWWBLine : public WorkoutWidgetItem {
 // COMMANDS
 //
 
-// mementos before and after used by commands
-struct PointMemento {
-
-    public:
-        PointMemento(double x, double y, int index) : x(x), y(y), index(index) {}
-        double x,y;
-        int index;
-};
-
 class CreatePointCommand : public WorkoutWidgetCommand
 {
     public:
@@ -207,6 +254,20 @@ class CreatePointCommand : public WorkoutWidgetCommand
         double x,y;
         int index;
 };
+
+class CreateBlockCommand : public WorkoutWidgetCommand
+{
+    public:
+        CreateBlockCommand(WorkoutWidget *w, QList<PointMemento>&points);
+        void redo();
+        void undo();
+
+    private:
+
+        //state info
+        QList<PointMemento> points;
+};
+
 
 class MovePointCommand : public WorkoutWidgetCommand
 {

@@ -1422,6 +1422,7 @@ LTMPlot::setCompareData(LTMSettings *set)
         // we need to do this for each date range as they are dependant
         // on the metrics chosen and can't be pre-cached
         settings->specification.setDateRange(DateRange(cd.start, cd.end));
+        settings->specification.setFilterSet(cd.specification.filterSet());
 
         // bests...
         QList<RideBest> herebests;
@@ -3742,7 +3743,7 @@ LTMPlot::refreshMarkers(LTMSettings *settings, QDate from, QDate to, int groupby
         qSort(tmpSeasons.begin(),tmpSeasons.end(),Season::LessThanForStarts);
         foreach (Season s, tmpSeasons) {
 
-            if (s.type != Season::temporary && s.name != settings->title && s.getStart() >= from && s.getStart() <= to) {
+            if (s.type != Season::temporary && s.getName() != settings->title && s.getStart() >= from && s.getStart() <= to) {
                 QwtIndPlotMarker *mrk = new QwtIndPlotMarker;
                 markers.append(mrk);
                 mrk->attach(this);
