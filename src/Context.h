@@ -26,6 +26,10 @@
 #include "CompareDateRange.h" // what intervals are being compared?
 #include "RideFile.h"
 
+#ifdef GC_HAS_CLOUD_DB
+#include "CloudDBChart.h"
+#endif
+
 // when config changes we need to notify widgets what changed
 // but there is so much config these days we need to be a little
 // more specific, not too specific since we would have a million
@@ -101,12 +105,21 @@ class Context : public QObject
         QStringList filters; // searchBox filters
         QStringList homeFilters; // homewindow sidebar filters
 
+        // train mode state
+        bool isRunning;
+        bool isPaused;
+
         // comparing things
         bool isCompareIntervals;
         QList<CompareInterval> compareIntervals;
 
         bool isCompareDateRanges;
         QList<CompareDateRange> compareDateRanges;
+
+#ifdef GC_HAS_CLOUD_DB
+        // CloudDB - common data
+        CloudDBChartListDialog *cdbChartListDialog;
+#endif
 
     public slots:
 
@@ -130,6 +143,9 @@ class Context : public QObject
 
         // user metrics - cascade
         void notifyUserMetricsChanged() { emit userMetricsChanged(); }
+
+        // view changed
+        void setIndex(int i) { viewIndex = i; emit viewChanged(i); }
 
         // realtime signals
         void notifyTelemetryUpdate(const RealtimeData &rtData) { telemetryUpdate(rtData); }
@@ -201,6 +217,9 @@ class Context : public QObject
 
         // user metrics
         void userMetricsChanged();
+
+        // view changed
+        void viewChanged(int);
 
         // refreshing stats
         void refreshStart();

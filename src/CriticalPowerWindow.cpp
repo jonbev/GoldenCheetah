@@ -1264,6 +1264,7 @@ CriticalPowerWindow::setSeries(int index)
 
         // hide velo cp editing
         if (series == veloclinicplot) {
+            // || ((series == watts || series == wattsKg ) && modelCombo->currentIndex() >= 1)) {
             CPEdit->show();
             CPSlider->show();
             CPLabel->show();

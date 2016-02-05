@@ -19,6 +19,12 @@
 #include "ErgFile.h"
 #include "Athlete.h"
 
+// Zwift XML handing
+#include "ZwoParser.h"
+#include <QFile>
+#include <QXmlInputSource>
+#include <QXmlSimpleReader>
+
 #include <stdint.h>
 #include "Units.h"
 
@@ -30,6 +36,7 @@ static bool setSupported()
     ::supported << ".mrc";
     ::supported << ".crs";
     ::supported << ".pgmf";
+    ::supported << ".zwo";
     return true;
 }
 static bool isinit = setSupported();
@@ -41,7 +48,7 @@ bool ErgFile::isWorkout(QString name)
     }
     return false;
 }
-ErgFile::ErgFile(QString filename, int &mode, Context *context) : 
+ErgFile::ErgFile(QString filename, int &mode, Context *context) :
     filename(filename), context(context), mode(mode)
 {
     if (context->athlete->zones(false)) {
@@ -75,8 +82,65 @@ void ErgFile::reload()
     // which parser to call? NOTE: we should look at moving to an ergfile factory
     // like we do with ride files if we end up with lots of different formats
     if (filename.endsWith(".pgmf", Qt::CaseInsensitive)) parseTacx();
+    else if (filename.endsWith(".zwo", Qt::CaseInsensitive)) parseZwift();
     else parseComputrainer();
-    
+
+}
+
+void ErgFile::parseZwift()
+{
+    // Initialise
+    Version = "";
+    Units = "";
+    Filename = "";
+    Name = "";
+    Duration = -1;
+    Ftp = 0;            // FTP this file was targetted at
+    MaxWatts = 0;       // maxWatts in this ergfile (scaling)
+    valid = false;             // did it parse ok?
+    rightPoint = leftPoint = 0;
+    format = ERG; // default to couse until we know
+    Points.clear();
+    Laps.clear();
+
+    // parse the file
+    QFile zwo(filename);
+    QXmlInputSource source(&zwo);
+    QXmlSimpleReader xmlReader;
+    ZwoParser handler;
+    xmlReader.setContentHandler(&handler);
+    xmlReader.setErrorHandler(&handler);
+    xmlReader.parse(source);
+
+    // save the metadata into our fields
+    // we lose category and category index (for now)
+    Name=handler.name;
+    Description=handler.description;
+    Source=handler.author;
+    Tags=handler.tags;
+
+    // extract contents into ErgFile....
+    // each watts value is in percent terms so apply CP
+    // and put into out format
+    foreach(ErgFilePoint p, handler.points) {
+        double watts = p.y * CP / 100.0;
+        Points << ErgFilePoint(p.x, watts, watts);
+        if (watts > MaxWatts) MaxWatts = watts;
+        Duration = p.x;
+    }
+
+    // texts
+    Texts = handler.texts;
+
+    if (Points.count()) {
+        valid = true;
+        Duration = Points.last().x;      // last is the end point in msecs
+        leftPoint = 0;
+        rightPoint = 1;
+
+        // calculate climbing etc
+        calculateMetrics();
+    }
 }
 
 void ErgFile::parseTacx()
@@ -202,7 +266,7 @@ void ErgFile::parseTacx()
                         if (sizeof(program) != input.readRawData((char*)&program, sizeof(program))) {
                             happy = false;
                             break;
-                        } 
+                        }
 
                         ErgFilePoint add;
 
@@ -354,6 +418,7 @@ void ErgFile::parseComputrainer(QString p)
 
                 add.x = lapmarker.cap(1).toDouble() * 60000; // from mins to 1000ths of a second
                 add.LapNum = ++lapcounter;
+                add.selected =false;
                 add.name = lapmarker.cap(2).simplified();
                 Laps.append(add);
 
@@ -363,6 +428,7 @@ void ErgFile::parseComputrainer(QString p)
 
                 add.x = rdist;
                 add.LapNum = ++lapcounter;
+                add.selected =false;
                 add.name = lapmarker.cap(2).simplified();
                 Laps.append(add);
 
@@ -377,6 +443,9 @@ void ErgFile::parseComputrainer(QString p)
                 QRegExp pname("^DESCRIPTION *", Qt::CaseInsensitive);
                 if (pname.exactMatch(settings.cap(1))) Name = settings.cap(2);
 
+                QRegExp iname("^ERGDBID *", Qt::CaseInsensitive);
+                if (iname.exactMatch(settings.cap(1))) ErgDBId = settings.cap(2);
+
                 QRegExp sname("^SOURCE *", Qt::CaseInsensitive);
                 if (sname.exactMatch(settings.cap(1))) Source = settings.cap(2);
 
@@ -385,7 +454,7 @@ void ErgFile::parseComputrainer(QString p)
                     Units = settings.cap(2);
                     // UNITS can be ENGLISH or METRIC (miles/km)
                     QRegExp penglish(" ENGLISH$", Qt::CaseInsensitive);
-                    if (penglish.exactMatch(Units)) { // Units <> METRIC 
+                    if (penglish.exactMatch(Units)) { // Units <> METRIC
                       //qDebug("Setting conversion to ENGLISH");
                       bIsMetric = false;
                     }
@@ -498,6 +567,330 @@ void ErgFile::parseComputrainer(QString p)
     } else {
         valid = false;
     }
+}
+
+// convert points to set of sections
+QList<ErgFileSection>
+ErgFile::Sections()
+{
+    QList<ErgFileSection> returning;
+
+    int secs=0;
+    for(int i=0; i<Points.count(); i++) {
+
+        // add a section from 0 to here if not starting at zero
+        if (i==0 && Points[i].x > 0) {
+            returning << ErgFileSection(Points[i].x, Points[i].y, Points[i].y);
+        }
+
+        // first section
+        if (i+1 < Points.count() && Points[i+1].x > Points[i].x) {
+            returning << ErgFileSection(Points[i+1].x-secs, Points[i].y, Points[i+1].y);
+            secs= Points[i+1].x;
+        }
+    }
+    return returning;
+}
+
+// when writing xml...
+static QString xmlprotect(QString string)
+{
+    QTextEdit trademark("&#8482;"); // process html encoding of(TM)
+    QString tm = trademark.toPlainText();
+
+    QString s = string;
+    s.replace( tm, "&#8482;" );
+    s.replace( "&", "&amp;" );
+    s.replace( ">", "&gt;" );
+    s.replace( "<", "&lt;" );
+    s.replace( "\"", "&quot;" );
+    s.replace( "\'", "&apos;" );
+    s.replace( "\n", "\\n" );
+    s.replace( "\r", "\\r" );
+    return s;
+}
+
+bool
+ErgFile::save(QStringList &errors)
+{
+    // save the file including changes
+    // XXX TODO we don't support writing pgmf or CRS just yet...
+    if (filename.endsWith("pgmf", Qt::CaseInsensitive) || format == CRS) {
+        errors << QString(QObject::tr("Unsupported file format"));
+        return false;
+    }
+
+    // type
+    QString typestring("UNKNOWN");
+    if (format==ERG) typestring = "ERG";
+    if (format==MRC) typestring = "MRC";
+    if (format==CRS) typestring = "CRS";
+    if (filename.endsWith("zwo", Qt::CaseInsensitive)) typestring="ZWO";
+
+    // get CP so we can scale back etc
+    int CP=0;
+    if (context->athlete->zones(false)) {
+        int zonerange = context->athlete->zones(false)->whichRange(QDateTime::currentDateTime().date());
+        if (zonerange >= 0) CP = context->athlete->zones(false)->getCP(zonerange);
+    }
+
+    // MRC and ERG formats are ok
+
+    //
+    // ERG file
+    //
+    if (typestring == "ERG" && format == ERG) {
+
+        // open the file etc
+        QFile f(filename);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text) == false) {
+            errors << "Unable to open file for writing.";
+            return false;
+        }
+
+        // setup output stream to file
+        QTextStream out(&f);
+        out.setCodec("UTF-8");
+
+        // write the header
+        //
+        // An example header:
+        //
+        // [COURSE HEADER]
+        // FTP=300
+        // SOURCE=ErgDB
+        // ERGDBID=455
+        // VERSION=2
+        // UNITS=ENGLISH
+        // DESCRIPTION=Weston Loop
+        // FILE NAME=weston
+        // MINUTES  WATTS
+        // [END COURSE HEADER]
+        out << "[COURSE HEADER]\n";
+        if (Ftp) out <<"FTP="<<QString("%1").arg(Ftp)<<"\n";
+        if (Source != "") out<<"SOURCE="<<Source<<"\n";
+        if (ErgDBId != "") out<<"ERGDBID="<<ErgDBId<<"\n";
+        if (Version != "") out<<"VERSION="<<Version<<"\n";
+        if (Units != "") out<<"UNITS="<<Units<<"\n";
+        if (Name != "") out<<"DESCRIPTION="<<Name<<"\n";
+        if (Filename != "") out<<"FILE NAME="<<Filename<<"\n";
+        out << "MINUTES WATTS\n";
+        out << "[END COURSE HEADER]\n";
+
+        //
+        // Write the line items
+        //
+        // IMPORTANT: if FTP is set then the contents
+        //            were scaled to local FTP when read
+        //            so need to be scaled back to FTP=xxx
+        //            when writing out.
+        out << "[COURSE DATA]\n";
+
+        bool first=true;
+        foreach(ErgFilePoint p, Points) {
+
+            // output
+            int watts = p.y;
+            double minutes = double(p.x) / (1000.0f*60.0f);
+
+            // we scale back if needed
+            if (Ftp && CP) watts = (double(p.y)/CP) * Ftp;
+
+            if (first) {
+                first=false;
+
+                // doesn't start at 0!
+                if (p.x > 0) {
+                    out <<QString("%1    %2\n").arg(0.0f, 0, 'f', 2).arg(watts);
+                }
+            }
+
+            // output in minutes and watts
+            out <<QString("%1    %2\n").arg(minutes, 0, 'f', 2).arg(watts);
+        }
+
+        out << "[END COURSE DATA]\n";
+        f.close();
+
+    }
+
+    //
+    // MRC
+    //
+    if (typestring == "MRC" && format == MRC) {
+
+        // open the file etc
+        QFile f(filename);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text) == false) {
+            errors << "Unable to open file for writing.";
+            return false;
+        }
+
+        // setup output stream to file
+        QTextStream out(&f);
+        out.setCodec("UTF-8");
+
+        // write the header
+        //
+        // An example header:
+        //
+        // [COURSE HEADER]
+        // FTP=300
+        // SOURCE=ErgDB
+        // ERGDBID=455
+        // VERSION=2
+        // UNITS=ENGLISH
+        // DESCRIPTION=Weston Loop
+        // FILE NAME=weston
+        // MINUTES  WATTS
+        // [END COURSE HEADER]
+        out << "[COURSE HEADER]\n";
+        if (Source != "") out<<"SOURCE="<<Source<<"\n";
+        if (ErgDBId != "") out<<"ERGDBID="<<ErgDBId<<"\n";
+        if (Version != "") out<<"VERSION="<<Version<<"\n";
+        if (Units != "") out<<"UNITS="<<Units<<"\n";
+        if (Name != "") out<<"DESCRIPTION="<<Name<<"\n";
+        if (Filename != "") out<<"FILE NAME="<<Filename<<"\n";
+        out << "MINUTES PERCENT\n";
+        out << "[END COURSE HEADER]\n";
+
+        //
+        // Write the line items
+        //
+        // IMPORTANT: if FTP is set then the contents
+        //            were scaled to local FTP when read
+        //            so need to be scaled back to FTP=xxx
+        //            when writing out.
+        out << "[COURSE DATA]\n";
+
+        bool first=true;
+        foreach(ErgFilePoint p, Points) {
+
+            // output watts as a percent of CP
+            double watts = p.y;
+            double minutes = double(p.x) / (1000.0f*60.0f);
+
+            // we scale back if needed
+            if (CP) watts = (double(p.y)/CP) * 100.0f;
+
+            if (first) {
+                first=false;
+
+                // doesn't start at 0!
+                if (p.x > 0) {
+                    out <<QString("%1    %2\n").arg(0.0f, 0, 'f', 2).arg(watts, 0, 'f', 0);
+                }
+            }
+
+            // output in minutes and watts percent with no precision
+            out <<QString("%1    %2\n").arg(minutes, 0, 'f', 2).arg(watts, 0, 'f', 0);
+        }
+
+        out << "[END COURSE DATA]\n";
+        f.close();
+
+    }
+
+    if (typestring == "ZWO" && format == ERG) {
+
+        // open the file etc
+        QFile f(filename);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text) == false) {
+            errors << "Unable to open file for writing.";
+            return false;
+        }
+
+        // setup output stream to file
+        QTextStream out(&f);
+        out.setCodec("UTF-8");
+
+        out << "<workout_file>\n";
+
+        // metadata at top
+        if (Name != "") out << "    <name>"<<xmlprotect(Name)<<"</name>\n";
+        if (Source != "") out << "    <author>"<<xmlprotect(Source)<<"</author>\n";
+        if (Description != "") out << "    <description>"<<xmlprotect(Description)<<"</description>\n";
+        if (Tags.count()) {
+            out << "    <tags>\n";
+            foreach(QString tag, Tags)
+                out << "        <tag>"<<xmlprotect(tag)<<"</tag>\n";
+            out << "    </tags>\n";
+        }
+
+        // workout
+        // We can write three types of sections
+        // a) Warmup where power rises
+        // b) SteadyState where power is constant
+        // c) Cooldown where port drops
+        // d) IntervalsT where intervals are repeated (N x effort then recovery)
+        //
+        // we do not write the fifth kind of section since we don't support them
+        // e) Freeride where the user can do whatever they please...
+        //
+        // interspersed with the data will be texts that are displayed
+        //
+        // alll watts are factors to apply to CP - where 1.0 is CP 0.5 is 50%.
+        // the data in memory has been scaled to CP so we need to divide it by
+        // CP to get the values to write to disk
+
+        // lets work in sections not points
+        // this means we work with duration/power rather than
+        // individual points, which is how the ZWO file is constructed
+
+        out << "    <workout>\n";
+        QList<ErgFileSection> sections = Sections();
+        for(int i=0; i<sections.count(); i++) {
+
+            // are there repeated sections of efforts and recovery?
+            int count=0;
+            for(int j=2; (i+j+1) < sections.count(); j += 2) {
+                if (sections[i].duration == sections[i+j].duration &&
+                    sections[i].start == sections[i+j].start &&
+                    sections[i].end == sections[i+j].end &&
+                    sections[i+1].duration == sections[i+j+1].duration &&
+                    sections[i+1].start == sections[i+j+1].start &&
+                    sections[i+1].end == sections[i+j+1].end) {
+                    count++;
+                } else {
+                    break;
+                }
+            }
+
+            if (count) {
+
+                // not including this one there are a number of repeats, so we need to output
+                // an IntervalsT element to repeat on/off intervals
+                out << "        <IntervalsT Repeat=\""<<(count+1)<<"\" "
+                    << "OnDuration=\"" << sections[i].duration/1000 << "\" "
+                    << "OffDuration=\"" << sections[i+1].duration/1000 << "\" "
+                    << "PowerOnLow=\"" << sections[i].start/CP << "\" "
+                    << "PowerOnHigh=\"" << sections[i].end/CP << "\" "
+                    << "PowerOffLow=\"" << sections[i+1].start/CP << "\" "
+                    << "PowerOffHigh=\"" << sections[i+1].end/CP << "\" />\n";
+
+                // skip on, bearing in mind the main loop increases i by 1
+                i += 1 + (count*2);
+
+            } else {
+
+                QString tag;
+
+                // just a section, but is it SteadyState, Warmup or Cooldown
+                if (sections[i].start == sections[i].end) tag = "SteadyState";
+                else if (sections[i].start >  sections[i].end) tag = "Cooldown";
+                else if (sections[i].start <  sections[i].end) tag = "Warmup";
+
+                out << "        <" << tag << " Duration=\""<<sections[i].duration/1000 << "\" "
+                                  << "PowerLow=\"" <<sections[i].start/CP << "\" "
+                                  << "PowerHigh=\"" <<sections[i].end/CP << "\" />\n";
+
+            }
+        }
+        out << "    </workout>\n";
+        out << "</workout_file>\n";
+        f.close();
+    }
+    return true;
 }
 
 ErgFile::~ErgFile()

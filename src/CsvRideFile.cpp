@@ -20,6 +20,12 @@
 
 #include "CsvRideFile.h"
 #include "Units.h"
+#include "Context.h"
+#include "Athlete.h"
+#include "Zones.h"
+#include "WPrime.h"
+#include "Settings.h"
+
 #include <QRegExp>
 #include <QTextStream>
 #include <QVector>
@@ -334,6 +340,8 @@ RideFile *CsvFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
                     // the trailing zeroes in the configuration area seem to be causing an error
                     // the number is in the format 5.000000
                     recInterval = (int)line.section(',',4,4).toDouble();
+                    rideFile->setDeviceType(line.section(',',26,26));
+                    rideFile->setTag("Device Info", line.section(',',20,21).remove(QChar('"')));
                 }
             }
 
@@ -427,7 +435,7 @@ RideFile *CsvFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
                 bool ok;
                 double lat = 0.0, lon = 0.0;
                 double headwind = 0.0;
-                double lrbalance = 0.0;
+                double lrbalance = RideFile::NA;
                 double lte = 0.0, rte = 0.0;
                 double lps = 0.0, rps = 0.0;
                 double smo2 = 0.0, thb = 0.0;
@@ -1028,6 +1036,25 @@ CsvFileReader::writeRideFile(Context *, const RideFile *ride, QFile &file, CsvTy
             out << point->interval;
             out << ",";
             out << point->alt;
+            out << "\n";
+        }
+    }
+    else if (format == wprime) {
+        WPrime *wp = ((RideFile*)ride)->wprimeData();
+        bool integral = (appsettings->value(NULL, GC_WBALFORM, "int").toString() == "int");
+
+        // Infos
+        out << "CP=" << wp->CP << ",WPRIME=" << wp->WPRIME << ",TAU=" << wp->TAU << ",model=" << (integral?"integral":"differential") <<"\n";
+
+        // CSV File header
+        out << "secs,watts,w'bal\n";
+
+        for (int i=0;i<wp->xdata(false).count();i++) {
+            out << wp->xdata(false).at(i)*60;
+            out << ",";
+            out << wp->smoothArray.at(i);
+            out << ",";
+            out << wp->ydata().at(i);
             out << "\n";
         }
     }

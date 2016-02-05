@@ -29,6 +29,7 @@
 #include <QStringList>
 #include <QFile>
 #include <QTextStream>
+#include <QTextEdit>
 #include <QRegExp>
 #include "Zones.h"      // For zones ... see below vvvv
 
@@ -48,6 +49,7 @@ class ErgFilePoint
     public:
 
         ErgFilePoint() : x(0), y(0), val(0) {}
+        ErgFilePoint(double x, double y, double val) : x(x), y(y), val(val) {}
 
         double x;     // x axis - time in msecs or distance in meters
         double y;     // y axis - load in watts or altitude
@@ -55,11 +57,33 @@ class ErgFilePoint
         double val;   // the value to send to the device (watts/gradient)
 };
 
+class ErgFileSection
+{
+    public:
+        ErgFileSection() : duration(0), start(0), end(0) {}
+        ErgFileSection(int duration, int start, int end) : duration(duration), start(start), end(end) {}
+
+        int duration;
+        double start, end;
+};
+
+class ErgFileText
+{
+    public:
+        ErgFileText() : x(0), pos(0), text("") {}
+        ErgFileText(double x, int pos, QString text) : x(x), pos(pos), text(text) {}
+
+        double x;
+        int pos;
+        QString text;
+};
+
 class ErgFileLap
 {
     public:
         long x;     // when does this LAP marker occur? (time in msecs or distance in meters
         int LapNum;     // from 1 - n
+        bool selected; // used by the editor
         QString name;
 };
 
@@ -71,12 +95,17 @@ class ErgFile
 
         ~ErgFile();             // delete the contents
 
+        bool save(QStringList &errors); // save back, with changes
+
         static ErgFile *fromContent(QString, Context *); // read from memory
         static bool isWorkout(QString); // is this a supported workout?
 
         void reload();          // reload after messed about
+
         void parseComputrainer(QString p = ""); // its an erg,crs or mrc file
         void parseTacx();         // its a pgmf file
+        void parseZwift();         // its a zwo file (zwift xml)
+
         bool isValid();         // is the file valid or not?
         double Cp;
         int format;             // ERG, CRS or MRC currently supported
@@ -84,12 +113,19 @@ class ErgFile
         double gradientAt(long, int&);      // return the gradient value for the passed meter
         int nextLap(long);      // return the msecs value for the next Lap marker
 
+        // turn the ergfile into a series of sections rather
+        // than a list of points
+        QList<ErgFileSection> Sections();
+
         QString Version,        // version number / identifer
                 Units,          // units used
                 Filename,       // filename from inside file
                 filename,       // filename on disk
                 Name,           // description in file
+                Description,    // long narrative for workout
+                ErgDBId,        // if downloaded from ergdb
                 Source;         // where did this come from
+        QStringList Tags;       // tagged strings
                 
         long    Duration;       // Duration of this workout in msecs
         int     Ftp;            // FTP this file was targetted at
@@ -101,6 +137,7 @@ class ErgFile
 
         QList<ErgFilePoint> Points;    // points in workout
         QList<ErgFileLap>   Laps;      // interval markers in the file
+        QList<ErgFileText>  Texts;     // texts to display
 
         void calculateMetrics(); // calculate NP value for ErgFile
 

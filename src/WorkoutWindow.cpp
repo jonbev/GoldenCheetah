@@ -21,15 +21,18 @@
 #include "WorkoutWidget.h"
 #include "WorkoutWidgetItems.h"
 
+static int MINTOOLHEIGHT = 350; // smaller than this, lose the toolbar
+
 WorkoutWindow::WorkoutWindow(Context *context) :
-    GcWindow(context), draw(true), context(context), active(false)
+    GcWindow(context), draw(true), context(context), active(false), recording(false)
 {
     setContentsMargins(0,0,0,0);
     setProperty("color", GColor(CTRAINPLOTBACKGROUND));
 
     setControls(NULL);
 
-    QVBoxLayout *layout = new QVBoxLayout(this);
+    QVBoxLayout *main = new QVBoxLayout(this);
+    QHBoxLayout *layout = new QHBoxLayout;
 
     connect(context, SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));
 
@@ -39,9 +42,15 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     // paint the W'bal curve
     mmp = new WWMMPCurve(workout);
 
-    // add the power and W'bal scale
+    // add the power, W'bal scale
     powerscale = new WWPowerScale(workout, context);
     wbalscale = new WWWBalScale(workout, context);
+
+    // lap markers
+    lap = new WWLap(workout);
+
+    // tte warning bar at bottom
+    tte = new WWTTE(workout);
 
     // add a line between the dots
     line = new WWLine(workout);
@@ -61,6 +70,10 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     // guides always on top!
     guide = new WWSmartGuide(workout);
 
+    // recording ...
+    now = new WWNow(workout, context);
+    telemetry = new WWTelemetry(workout, context);
+
     // setup the toolbar
     toolbar = new QToolBar(this);
     toolbar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
@@ -71,6 +84,11 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     saveAct = new QAction(saveIcon, tr("Save"), this);
     connect(saveAct, SIGNAL(triggered()), this, SLOT(saveFile()));
     toolbar->addAction(saveAct);
+
+    QIcon propertiesIcon(":images/toolbar/properties.png");
+    propertiesAct = new QAction(propertiesIcon, tr("Properties"), this);
+    connect(propertiesAct, SIGNAL(triggered()), this, SLOT(properties()));
+    toolbar->addAction(propertiesAct);
 
     toolbar->addSeparator();
 
@@ -150,15 +168,41 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     telemetryUpdate(RealtimeData());
 #endif
 
+    // editing the code...
+    code = new CodeEditor(this);
+    code->setContextMenuPolicy(Qt::NoContextMenu); // no context menu
+    code->installEventFilter(this); // filter the undo/redo stuff
+    code->hide();
+
     // WATTS and Duration for the cursor
-    layout->addWidget(toolbar);
+    main->addWidget(toolbar);
     layout->addWidget(workout);
+    layout->addWidget(code);
+    main->addLayout(layout);
 
     // make it look right
     saveAct->setEnabled(false);
     undoAct->setEnabled(false);
     redoAct->setEnabled(false);
+
+    // watch for erg run/stop
+    connect(context, SIGNAL(start()), this, SLOT(start()));
+    connect(context, SIGNAL(stop()), this, SLOT(stop()));
+
+    // text changed
+    connect(code, SIGNAL(textChanged()), this, SLOT(qwkcodeChanged()));
+    connect(code, SIGNAL(cursorPositionChanged()), workout, SLOT(hoverQwkcode()));
+
+    // set the widgets etc
     configChanged(CONFIG_APPEARANCE);
+}
+
+void
+WorkoutWindow::resizeEvent(QResizeEvent *)
+{
+    // show or hide toolbar if big enough
+    if (!recording && height() > MINTOOLHEIGHT) toolbar->show();
+    else toolbar->hide();
 }
 
 void
@@ -183,12 +227,88 @@ WorkoutWindow::configChanged(qint32)
     ylabel->setStyleSheet("color: darkGray;");
     TSSlabel->setStyleSheet("color: darkGray;");
     IFlabel->setStyleSheet("color: darkGray;");
+
+    // maximum of 20 characters per line ?
+    QFont f;
+    QFontMetrics ff(f);
+    code->setFixedWidth(ff.boundingRect("99x999s@999-999r999s@999-999").width()+20);
+
+    // text edit colors
+    QPalette palette;
+    palette.setColor(QPalette::Window, GColor(CTRAINPLOTBACKGROUND));
+    palette.setColor(QPalette::Background, GColor(CTRAINPLOTBACKGROUND));
+
+    // only change base if moved away from white plots
+    // which is a Mac thing
+#ifndef Q_OS_MAC
+    if (GColor(CTRAINPLOTBACKGROUND) != Qt::white)
+#endif
+    {
+        //palette.setColor(QPalette::Base, GCColor::alternateColor(GColor(CTRAINPLOTBACKGROUND)));
+        palette.setColor(QPalette::Base, GColor(CTRAINPLOTBACKGROUND));
+        palette.setColor(QPalette::Window, GColor(CTRAINPLOTBACKGROUND));
+    }
+
+    palette.setColor(QPalette::WindowText, GCColor::invertColor(GColor(CTRAINPLOTBACKGROUND)));
+    palette.setColor(QPalette::Text, GCColor::invertColor(GColor(CTRAINPLOTBACKGROUND)));
+    code->setPalette(palette);
     repaint();
+}
+
+bool
+WorkoutWindow::eventFilter(QObject *obj, QEvent *event)
+{
+    bool returning=false;
+
+    // we only filter out keyboard shortcuts for undo redo etc
+    // in the qwkcode editor, anything else is of no interest.
+    if (obj != code) return returning;
+
+    if (event->type() == QEvent::KeyPress) {
+
+        // we care about cmd / ctrl
+        Qt::KeyboardModifiers kmod = static_cast<QInputEvent*>(event)->modifiers();
+        bool ctrl = (kmod & Qt::ControlModifier) != 0;
+
+        switch(static_cast<QKeyEvent*>(event)->key()) {
+
+        case Qt::Key_Y:
+            if (ctrl) {
+                workout->redo();
+                returning = true; // we grab all key events
+            }
+            break;
+
+        case Qt::Key_Z:
+            if (ctrl) {
+                workout->undo();
+                returning=true;
+            }
+            break;
+
+        }
+
+    }
+    return returning;
 }
 
 void
 WorkoutWindow::saveFile()
 {
+    workout->save();
+}
+
+void
+WorkoutWindow::properties()
+{
+    // metadata etc -- needs a dialog
+    code->setHidden(!code->isHidden());
+}
+
+void
+WorkoutWindow::qwkcodeChanged()
+{
+    workout->fromQwkcode(code->document()->toPlainText());
 }
 
 void
@@ -207,3 +327,20 @@ WorkoutWindow::selectMode()
     selectAct->setEnabled(false);
 }
 
+
+void
+WorkoutWindow::start()
+{
+    recording = true;
+    toolbar->hide();
+    code->hide();
+    workout->start();
+}
+
+void
+WorkoutWindow::stop()
+{
+    recording = false;
+    if (height() > MINTOOLHEIGHT) toolbar->show();
+    workout->stop();
+}

@@ -33,9 +33,8 @@
 #include <assert.h>
 #ifdef Q_CC_MSVC
 #include <float.h>
-#else
-#include <cmath>
 #endif
+#include <cmath>
 #include <qwt_spline.h>
 
 #ifdef GC_HAVE_SAMPLERATE
@@ -1057,7 +1056,7 @@ void RideFile::appendPoint(double secs, double cad, double hr, double km,
     dataPresent.headwind |= (headwind != 0);
     dataPresent.slope    |= (slope != 0);
     dataPresent.temp     |= (temp != NA);
-    dataPresent.lrbalance|= (lrbalance != 0);
+    dataPresent.lrbalance|= (lrbalance != 0 && lrbalance != NA);
     dataPresent.lte      |= (lte != 0);
     dataPresent.rte      |= (rte != 0);
     dataPresent.lps      |= (lps != 0);
@@ -1089,7 +1088,8 @@ void RideFile::appendPoint(const RideFilePoint &point)
 {
     appendPoint(point.secs,point.cad,point.hr,point.km,point.kph,
                 point.nm,point.watts,point.alt,point.lon,point.lat,
-                point.headwind, point.slope, point.temp, point.lrbalance,
+                point.headwind, point.slope,
+                point.temp, point.lrbalance,
                 point.lte, point.rte, point.lps, point.rps,
                 point.lpco, point.rpco,
                 point.lppb, point.rppb, point.lppe, point.rppe,
@@ -1370,7 +1370,7 @@ RideFile::getPointValue(int index, SeriesType series) const
 QVariant
 RideFile::getPointFromValue(double value, SeriesType series) const
 {
-    if (series==RideFile::temp && value == RideFile::NA)
+    if ((series==RideFile::temp || series==RideFile::lrbalance) && value == RideFile::NA)
         return "";
     else if (series==RideFile::wattsKg)
         return "";
@@ -2015,8 +2015,8 @@ RideFile::recalculateDerivedSeries(bool force)
             current = dataPoints_[i]->gear;
             if (i<dataPoints_.count()-1) next = dataPoints_[i+1]->gear; else next = 0.0f;
             // if there is a big jump to current in relation to last-next consider this a outlier
-            double diff1 = abs(last-next);
-            double diff2 = abs(last-current);
+            double diff1 = std::abs(last-next);
+            double diff2 = std::abs(last-current);
             if ((diff1 < 0.01f) || (diff2 >= (diff1+0.5f))){
                 // single outlier (no shift up/down in 2 seconds
                 dataPoints_[i]->gear = (last>next) ? last : next;
@@ -2358,7 +2358,7 @@ RideFile::resample(double newRecIntSecs, int interpolate)
 // 1.26s sampling or higher to 1s sampling when merging data.
 //
 RideFile *
-RideFile::resample(double newRecIntSecs, int interpolate)
+RideFile::resample(double newRecIntSecs, int /*interpolate*/)
 {
 
     // resample if interval has changed

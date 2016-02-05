@@ -24,6 +24,7 @@
 #include <QToolBar> // for Q_PROPERTY
 #include <QObject> // for Q_PROPERTY
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QCheckBox>
 #include <QLabel>
 
@@ -35,9 +36,12 @@
 #include "Units.h"
 #include "Colors.h"
 
+#include "../qtsolutions/codeeditor/codeeditor.h"
+
 class WorkoutWidget;
 class WWPowerScale;
 class WWWBalScale;
+class WWTTE;
 class WWLine;
 class WWWBLine;
 class WWRect;
@@ -45,6 +49,9 @@ class WWBlockCursor;
 class WWBlockSelection;
 class WWMMPCurve;
 class WWSmartGuide;
+class WWLap;
+class WWNow;
+class WWTelemetry;
 
 class WorkoutWindow : public GcWindow
 {
@@ -54,11 +61,15 @@ class WorkoutWindow : public GcWindow
 
         WorkoutWindow(Context *context);
 
+        // edit the definition
+        CodeEditor *code;
+
         // workout widget updates these
         QLabel *xlabel, *ylabel;
         QLabel *TSSlabel, *IFlabel;
 
-        QAction *saveAct, *undoAct, *redoAct,
+        QAction *saveAct, *propertiesAct,
+                *undoAct, *redoAct,
                 *drawAct, *selectAct,
                 *cutAct, *copyAct, *pasteAct;
 
@@ -68,11 +79,25 @@ class WorkoutWindow : public GcWindow
 
         // toolbar functions
         void saveFile();
+        void properties();
         void drawMode();
         void selectMode();
 
+        // qwkcode edited!
+        void qwkcodeChanged();
+
         // trap signals
         void configChanged(qint32);
+
+        // start/stop running
+        void stop();
+        void start();
+
+        // show hide toolbar if too small
+        void resizeEvent(QResizeEvent * event);
+
+    protected:
+        bool eventFilter(QObject *obj, QEvent *event);
 
     private:
 
@@ -80,8 +105,10 @@ class WorkoutWindow : public GcWindow
 
         QToolBar *toolbar;
         WorkoutWidget *workout; // will become editor.
+
         WWPowerScale *powerscale;
         WWWBalScale *wbalscale;
+        WWTTE *tte;
         WWLine *line;
         WWWBLine *wbline;
         WWRect *rect;
@@ -89,7 +116,12 @@ class WorkoutWindow : public GcWindow
         WWBlockSelection *brect;
         WWMMPCurve *mmp;
         WWSmartGuide *guide;
+        WWLap *lap;
+        WWNow *now;
+        WWTelemetry *telemetry;
+
         bool active;
+        bool recording;
 };
 
 #endif // _GC_WorkoutWindow_h

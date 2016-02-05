@@ -47,6 +47,7 @@
 #include "TrainDB.h"
 #include "GcUpgrade.h"
 #include "HelpWhatsThis.h"
+#include "CsvRideFile.h"
 
 // DIALOGS / DOWNLOADS / UPLOADS
 #include "AboutDialog.h"
@@ -110,6 +111,15 @@
 #include "WFApi.h"
 #endif
 
+// CloudDB
+#ifdef GC_HAS_CLOUD_DB
+#include "CloudDBCommon.h"
+#include "CloudDBChart.h"
+#include "CloudDBCurator.h"
+#include "CloudDBStatus.h"
+#endif
+
+
 // We keep track of all theopen mainwindows
 QList<MainWindow *> mainwindows;
 QDesktopWidget *desktop = NULL;
@@ -122,6 +132,7 @@ MainWindow::MainWindow(const QDir &home)
     setAttribute(Qt::WA_DeleteOnClose);
     mainwindows.append(this);  // add us to the list of open windows
     init = false;
+    if (desktop == NULL) desktop = QApplication::desktop();
 #ifdef Q_OS_MAC
     head = NULL; // early resize event causes a crash
 #endif
@@ -147,7 +158,6 @@ MainWindow::MainWindow(const QDir &home)
         QNetworkProxy::setApplicationProxy(listOfProxies.first());
     }
 
-    if (desktop == NULL) desktop = QApplication::desktop();
     static const QIcon hideIcon(":images/toolbar/main/hideside.png");
     static const QIcon rhideIcon(":images/toolbar/main/hiderside.png");
     static const QIcon showIcon(":images/toolbar/main/showside.png");
@@ -678,6 +688,19 @@ MainWindow::MainWindow(const QDir &home)
     optionsMenu->addSeparator();
     optionsMenu->addAction(tr("Find intervals..."), this, SLOT(addIntervals()), tr (""));
 
+#ifdef GC_HAS_CLOUD_DB
+    // CloudDB options
+    optionsMenu->addSeparator();
+    optionsMenu->addAction(tr("CloudDB Status..."), this, SLOT(cloudDBshowStatus()));
+    QMenu *cloudDBMenu = optionsMenu->addMenu(tr("CloudDB Contributions"));
+    cloudDBMenu->addAction(tr("Maintain charts"), this, SLOT(cloudDBuserEditChart()));
+
+    if (CloudDBCommon::addCuratorFeatures) {
+        QMenu *cloudDBCurator = optionsMenu->addMenu(tr("CloudDB Curator"));
+        cloudDBCurator->addAction(tr("Curate charts"), this, SLOT(cloudDBcuratorEditChart()));
+    }
+
+#endif
     HelpWhatsThis *optionsMenuHelp = new HelpWhatsThis(optionsMenu);
     optionsMenu->setWhatsThis(optionsMenuHelp->getWhatsThisText(HelpWhatsThis::MenuBar_Tools));
 
@@ -1399,6 +1422,8 @@ MainWindow::exportRide()
     // what format?
     const RideFileFactory &rff = RideFileFactory::instance();
     QStringList allFormats;
+    allFormats << "Export all data (*.csv)";
+    allFormats << "Export W' balance (*.csv)";
     foreach(QString suffix, rff.writeSuffixes())
         allFormats << QString("%1 (*.%2)").arg(rff.description(suffix)).arg(suffix);
 
@@ -1414,7 +1439,24 @@ MainWindow::exportRide()
 
     QFile file(fileName);
     RideFile *currentRide = currentTab->context->ride ? currentTab->context->ride->ride() : NULL;
-    bool result = RideFileFactory::instance().writeRideFile(currentTab->context, currentRide, file, getSuffix.cap(1));
+    bool result=false;
+
+    int idx = allFormats.indexOf(getSuffix.cap(0));
+    if (idx>1) {
+
+        result = RideFileFactory::instance().writeRideFile(currentTab->context, currentRide, file, getSuffix.cap(1));
+
+    } else if (idx==0){
+
+        CsvFileReader writer;
+        result = writer.writeRideFile(currentTab->context, currentRide, file, CsvFileReader::gc);
+
+    } else if (idx==1){
+
+        CsvFileReader writer;
+        result = writer.writeRideFile(currentTab->context, currentRide, file, CsvFileReader::wprime);
+
+    }
 
     if (result == false) {
         QMessageBox oops(QMessageBox::Critical, tr("Export Failed"),
@@ -1878,9 +1920,8 @@ MainWindow::saveGCState(Context *context)
     context->showToolbar = true;
 #endif
     context->searchText = searchBox->text();
-    context->viewIndex = scopebar->selected();
     context->style = styleAction->isChecked();
-    context->viewIndex = scopebar->selected();
+    context->setIndex(scopebar->selected());
 }
 
 void
@@ -2279,3 +2320,56 @@ MainWindow::searchFocusOut()
 {
     searchBox->setFixedWidth(150);
 }
+
+#ifdef GC_HAS_CLOUD_DB
+void
+MainWindow::cloudDBuserEditChart()
+{
+    if (!(appsettings->cvalue(currentTab->context->athlete->cyclist, GC_CLOUDDB_TC_ACCEPTANCE, false).toBool())) {
+       CloudDBAcceptConditionsDialog acceptDialog(currentTab->context->athlete->cyclist);
+       acceptDialog.setModal(true);
+       if (acceptDialog.exec() == QDialog::Rejected) {
+          return;
+       };
+    }
+
+    if (currentTab->context->cdbChartListDialog == NULL) {
+        currentTab->context->cdbChartListDialog = new CloudDBChartListDialog();
+    }
+
+    // force refresh in prepare to allways get the latest data here
+    if (currentTab->context->cdbChartListDialog->prepareData(currentTab->context->athlete->cyclist, CloudDBCommon::UserEdit)) {
+        currentTab->context->cdbChartListDialog->exec(); // no action when closed
+    }
+}
+
+void
+MainWindow::cloudDBcuratorEditChart()
+{
+    // first check if the user is a curator
+    CloudDBCuratorClient *curatorClient = new CloudDBCuratorClient;
+    if (curatorClient->isCurator(appsettings->cvalue(currentTab->context->athlete->cyclist, GC_ATHLETE_ID, "" ).toString())) {
+
+        if (currentTab->context->cdbChartListDialog == NULL) {
+            currentTab->context->cdbChartListDialog = new CloudDBChartListDialog();
+        }
+
+        // force refresh in prepare to allways get the latest data here
+        if (currentTab->context->cdbChartListDialog->prepareData(currentTab->context->athlete->cyclist, CloudDBCommon::CuratorEdit)) {
+            currentTab->context->cdbChartListDialog->exec(); // no action when closed
+        }
+    } else {
+        QMessageBox::warning(0, tr("CloudDB"), QString(tr("Current athlete is not registered as curator - please contact the GoldenCheetah team")));
+
+    }
+}
+
+void
+MainWindow::cloudDBshowStatus() {
+
+    CloudDBStatusClient::displayCloudDBStatus();
+}
+
+
+#endif
+

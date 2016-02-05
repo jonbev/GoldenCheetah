@@ -26,10 +26,6 @@
 #include "RideNavigator.h"
 #include "HelpWhatsThis.h"
 
-#if GC_HAS_CLOUD_DB
-#include "ChartExchange.h"
-#endif
-
 #include <QApplication>
 #include <QtGui>
 
@@ -157,17 +153,10 @@ LTMTool::LTMTool(Context *context, LTMSettings *settings) : QWidget(context->mai
     applyButton = new QPushButton(tr("Apply")); // connected in LTMWindow.cpp (weird!?)
     newButton = new QPushButton(tr("Add Current"));
     connect(newButton, SIGNAL(clicked()), this, SLOT(addCurrent()));
-#ifdef GC_HAS_CLOUD_DB
-    sharedChartsDialogButton = new QPushButton(tr("Shared Charts"));
-    connect(sharedChartsDialogButton, SIGNAL(clicked()), this, SLOT(sharedChartsDialog()));
-#endif
+
     QHBoxLayout *presetButtons = new QHBoxLayout;
     presetButtons->addWidget(applyButton);
     presetButtons->addStretch();
-#ifdef GC_HAS_CLOUD_DB
-    presetButtons->addWidget(sharedChartsDialogButton);
-    presetButtons->addStretch();
-#endif
     presetButtons->addWidget(newButton);
 
     presetLayout->addLayout(presetButtons);
@@ -1499,25 +1488,6 @@ LTMTool::addCurrent()
     context->notifyPresetsChanged();
 }
 
-#ifdef GC_HAS_CLOUD_DB
-void
-LTMTool::sharedChartsDialog()
-{
-    ChartExchangeRetrieveDialog dialog;
-
-    dialog.setModal(true);
-
-    // selected choosen
-    int ret;
-    if ((ret=dialog.exec()) == QDialog::Accepted) {
-        LTMSettings s = dialog.getSelectedSettings();
-        context->athlete->presets.append(s);
-        context->notifyPresetsChanged();
-    }
-}
-#endif
-
-
 // set the estimateSelection based upon what is available
 void 
 EditMetricDetailDialog::modelChanged()
@@ -2464,7 +2434,7 @@ LTMTool::setFilter(QStringList files)
 } 
 
 DataFilterEdit::DataFilterEdit(QWidget *parent, Context *context)
-: QTextEdit(parent), context(context), c(0)
+: QTextEdit(parent), c(0), context(context)
 {
     connect(this, SIGNAL(cursorPositionChanged()), this, SLOT(checkErrors()));
 }

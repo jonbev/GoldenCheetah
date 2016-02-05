@@ -23,50 +23,172 @@
 
 #include "WPrime.h"
 #include "ErgFile.h"
+#include "RideFile.h"
 #include "RideFileCache.h"
+#include "RealtimeData.h"
 
 #include "TimeUtils.h" // time_to_string()
+
+#include <QMessageBox>
 #include <QFontMetrics>
+#include <QRegExp>
 
 #include <cmath>
 #include <float.h> // DBL_EPSILON
 
-// height and width of widgets
-static const double IHEIGHT = 10;
-static const double THEIGHT = 25;
-static const double BHEIGHT = 35;
-static const double LWIDTH = 65;
-static const double RWIDTH = 35;
+static int MINTOOLHEIGHT = 350; // minimum size for a full editor
+static int RECOVERY = 70; // anything below 70% of CP is a recovery effort
 
-// axis tic marks
-static const int XTICLENGTH = 3;
-static const int YTICLENGTH = 0;
-static const int XTICS = 20;
-static const int YTICS = 10;
+void WorkoutWidget::adjustLayout()
+{
+    // adjust all the settings based upon current size
+    if (height() > MINTOOLHEIGHT) {
 
-static const int SPACING = 2; // between labels and tics (if there are tics)
+        // big, can edit and all widgets shown
+        IHEIGHT = 10;
+        THEIGHT = 35;
+        BHEIGHT = 35;
+        LWIDTH = 65;
+        RWIDTH = 35;
+        XTICLENGTH = 3;
+        YTICLENGTH = 0;
+        XTICS = 20;
+        YTICS = 10;
+        SPACING = 2; // between labels and tics (if there are tics)
+        XMOVE = 5; // how many to move X when cursoring
+        YMOVE = 1; // how many to move Y when cursoring
+        GRIDLINES = true;
+        LOG = false;
 
-static const int XMOVE = 5; // how many to move X when cursoring
-static const int YMOVE = 1; // how many to move Y when cursoring
+    } else {
 
-// grid lines (y only)
-static bool GRIDLINES = true;
+        // mini mode
+        IHEIGHT = 0;
+        THEIGHT = 0;
+        BHEIGHT = 20;
+        LWIDTH = 10;
+        RWIDTH = 10;
+        XTICLENGTH = 3;
+        YTICLENGTH = 0;
+        XTICS = 20;
+        YTICS = 5;
+        SPACING = 2; // between labels and tics (if there are tics)
+        XMOVE = 5; // how many to move X when cursoring
+        YMOVE = 1; // how many to move Y when cursoring
+        GRIDLINES = false;
+        LOG = false;
+    }
+}
 
 WorkoutWidget::WorkoutWidget(WorkoutWindow *parent, Context *context) :
-    QWidget(parent),  state(none), ergFile(NULL), dragging(NULL), parent(parent), context(context), stackptr(0)
+    QWidget(parent),  state(none), ergFile(NULL), dragging(NULL), parent(parent), context(context), stackptr(0), recording_(false)
 {
     maxX_=3600;
-    maxY_=300;
+    maxY_=400;
+
+    // when plotting telemetry these are maxY for those series
+    cadenceMax = 200; // make it line up between power and hr
+    hrMax = 220;
+    speedMax = 50;
 
     onDrag = onCreate = onRect = atRect = QPointF(-1,-1);
+    qwkactive = false;
 
     // watch mouse events for user interaction
+    adjustLayout();
     installEventFilter(this);
     setMouseTracking(true);
 
     connect(context, SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));
     connect(context, SIGNAL(ergFileSelected(ErgFile*)), this, SLOT(ergFileSelected(ErgFile*)));
+    connect(context, SIGNAL(telemetryUpdate(RealtimeData)), this, SLOT(telemetryUpdate(RealtimeData)));
     configChanged(CONFIG_APPEARANCE);
+}
+
+void
+WorkoutWidget::start()
+{
+    recording_ = true;
+
+    // if we have edited the erg we need to update the in-memory points
+    if (ergFile && stack.count()) {
+
+        // replace all the points
+        ergFile->Points.clear();
+        ergFile->Duration = 0;
+        foreach(WWPoint *p, points_) {
+            ergFile->Points.append(ErgFilePoint(p->x * 1000, p->y, p->y));
+            ergFile->Duration = p->x * 1000; // whatever the last is
+        }
+
+        // force any other plots to take the changes
+        context->notifyErgFileSelected(ergFile);
+    }
+
+    // clear previous data
+    wbal.clear();
+    watts.clear();
+    hr.clear();
+    speed.clear();
+    cadence.clear();
+
+    // and resampling data
+    count = wbalSum = wattsSum = hrSum = speedSum = cadenceSum =0;
+
+    // set initial
+    cadenceMax = 200;
+    hrMax = 220;
+    speedMax = 50;
+
+    // replot
+    update();
+}
+
+void
+WorkoutWidget::stop()
+{
+    recording_ = false;
+    update();
+}
+
+void
+WorkoutWidget::telemetryUpdate(RealtimeData rt)
+{
+    // only plot when recording
+    if (!recording_) return;
+
+    wbalSum += rt.getWbal();
+    wattsSum += rt.getWatts();
+    hrSum += rt.getHr();
+    cadenceSum += rt.getCadence();
+    speedSum += rt.getSpeed();
+
+    count++;
+
+    // did we get 5 samples (5hz refresh rate) ?
+    if (count == 5) {
+        int b = wbalSum / 5.0f;
+        wbal << b;
+        int w = wattsSum / 5.0f;
+        watts << w;
+        int h = hrSum / 5.0f;
+        hr << h;
+        double s = speedSum / 5.0f;
+        speed << s;
+        int c = cadenceSum / 5.0f;
+        cadence << c;
+
+        // clear for next time
+        count = wbalSum = wattsSum = hrSum = speedSum = cadenceSum =0;
+
+        // do we need to increase maxes?
+        if (c > cadenceMax) cadenceMax=c;
+        if (s > speedMax) speedMax=s;
+        if (h > hrMax) hrMax=h;
+
+        // replot
+        update();
+    }
 }
 
 void
@@ -93,6 +215,7 @@ WorkoutWidget::timeout()
 // # EVENT              STATE       ACTION                              NEXT STATE
 // - --------------     ------      ---------------                     ----------
 // 1 mouse move         none        hover/unhover point/block           none
+//                      none        hover/unhover lap marker            none
 //                      drag        move point around                   drag
 //                      dragblock   move block around                   dragblock
 //                      rect        resize and scan for selections      rect
@@ -134,10 +257,6 @@ WorkoutWidget::timeout()
 bool
 WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
 {
-    // we nearly always return false for filtering
-    // except wheel events (for example)
-    bool returning = false;
-
     // process as normal if not one of ours
     if (obj != this) return false;
 
@@ -147,6 +266,9 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
 
     // is a repaint going to be needed?
     bool updateNeeded=false;
+
+    // are we filtering out the event? (e.g. keyboard / scroll)
+    bool filterNeeded=false;
 
     //
     // 1 MOUSE MOVE [we always repaint]
@@ -185,6 +307,10 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
                     }
                 }
             }
+
+            // set lap marker state if needed, but don't
+            // lost the updateNeeded state if already true
+            updateNeeded= updateNeeded || setLapState();
 
         // STATE: CREATE
         } else if (state == create) {
@@ -272,13 +398,13 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
                         hover=true;
                         onDrag = QPointF(dragging->x, dragging->y);
                         state = drag;
-                        
+
                     }
                     break;
                 }
             }
 
-            // if state is still none and we're not hovering, 
+            // if state is still none and we're not hovering,
             // we aren't on top of a point, so create a new
             // one or start select mode if shift is pressed
             if (state == none && !hover) {
@@ -290,7 +416,7 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
                     atRect = onRect = p;
                     state = rect;
                     updateNeeded = true;
- 
+
                 } else {
 
                     // UNSHIFTED CREATE A POINT
@@ -300,7 +426,8 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
                     // so lets set the timer and remember
                     // where we were
                     onCreate = p;
-                    QTimer::singleShot(500, this, SLOT(timeout()));
+                    timer.stop(); // cancel any previous timeout
+                    timer.singleShot(500, this, SLOT(timeout()));
                 }
             }
         }
@@ -346,6 +473,7 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
             recompute();
         }
 
+        foreach(WWPoint *point, points_) point->hover=false;
         state = none;
         dragging = NULL;
         updateNeeded = true;
@@ -387,7 +515,7 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
 #else
             updateNeeded = scale(QPoint(0,w->delta()));
 #endif
-            returning = true;
+            filterNeeded = true;
         }
 
         // will need to ..
@@ -412,15 +540,39 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
         case Qt::Key_Down:
         case Qt::Key_Left:
         case Qt::Key_Right:
+            filterNeeded = true; // we grab all key events
             updateNeeded=movePoints(key,kmod);
             break;
 
         case Qt::Key_Escape:
+            filterNeeded = true; // we grab all key events
             updateNeeded=selectClear();
+            break;
+
+        case Qt::Key_C:
+            if (ctrl) {
+                filterNeeded = true; // we grab all key events
+                copy();
+            }
+            break;
+
+        case Qt::Key_V:
+            if (ctrl) {
+                filterNeeded = true; // we grab all key events
+                paste();
+            }
+            break;
+
+        case Qt::Key_X:
+            if (ctrl) {
+                filterNeeded = true; // we grab all key events
+                cut();
+            }
             break;
 
         case Qt::Key_A:
             if (ctrl) {
+                filterNeeded = true; // we grab all key events
                 updateNeeded=selectAll();
             }
             break;
@@ -428,6 +580,7 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
         case Qt::Key_Y:
             if (ctrl) {
                 redo();
+                filterNeeded = true; // we grab all key events
                 updateNeeded=true;
             }
             break;
@@ -435,12 +588,14 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
         case Qt::Key_Z:
             if (ctrl) {
                 undo();
+                filterNeeded = true; // we grab all key events
                 updateNeeded=true;
             }
             break;
 
         case Qt::Key_Delete:
             // delete!
+            filterNeeded = true; // we grab all key events
             updateNeeded=deleteSelected();
             break;
         }
@@ -465,7 +620,8 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
     //
     if (event->type() == QEvent::Resize) {
 
-        // we need to update!
+        // we need to adjust layout and repaint
+        adjustLayout();
         updateNeeded = true;
     }
 
@@ -485,6 +641,50 @@ WorkoutWidget::eventFilter(QObject *obj, QEvent *event)
 
     // return false - we are eavesdropping not processing.
     // except for wheel events which we steal
+    return filterNeeded;
+}
+
+bool
+WorkoutWidget::setLapState()
+{
+    // by default nothing to do
+    bool returning = false;
+
+    // have laps been hovered/unhovered?
+    if (laps_.count()==0) return false;
+
+    // where is the cursor
+    QPoint p = mapFromGlobal(QCursor::pos());
+    int x = reverseTransform(p.x(),0).x();
+
+    bool intop = top().contains(p);
+
+    // run through lap markers..
+    for(int i=0; i<laps_.count(); i++) {
+
+        if (!intop) {
+
+            // unselect regardless as cursor not there, notify if needed
+            if (laps_[i].selected == true) returning = true;
+            laps_[i].selected = false;
+
+        } else {
+            // we need to work out if the cursor is for us
+            if ((x > (laps_[i].x/1000.00f)) && (i == (laps_.count()-1) || x < (laps_[i+1].x/1000.00f))) { // cursor to right
+
+                // select and notify it changed
+                if (!laps_[i].selected) returning=true;
+                laps_[i].selected = true;
+
+            } else {
+
+                // nope, so deselect and notify if changed
+                if (laps_[i].selected) returning=true;
+                laps_[i].selected = false;
+            }
+        }
+    }
+
     return returning;
 }
 
@@ -543,10 +743,16 @@ WorkoutWidget::setBlockCursor()
         selectionBlockText2 = QString("%1w").arg(joules/secs, 0, 'f', 0);
         selectionBlockText = time_to_string(secs);
 
+        parent->copyAct->setEnabled(true);
+        parent->cutAct->setEnabled(true);
+
     } else {
 
         selectionBlock = QPainterPath();
         selectionBlockText = selectionBlockText2 = "";
+
+        parent->copyAct->setEnabled(false);
+        parent->cutAct->setEnabled(false);
     }
 
     //
@@ -566,6 +772,7 @@ WorkoutWidget::setBlockCursor()
     QPointF last(0,0);
     int lastx=0;
     int lasty=0;
+    int hoveri=-1;
 
     foreach(WWPoint *p, points_) {
 
@@ -588,6 +795,7 @@ WorkoutWidget::setBlockCursor()
             if (block.contains(c)) {
 
                 // if different then update and want a repaint
+                hoveri=points_.indexOf(p);
                 if (cursorBlock != block) {
                     cursorBlock = block;
                     cursorBlockText = time_to_string(p->x - lastx);
@@ -608,6 +816,46 @@ WorkoutWidget::setBlockCursor()
         lastx = p->x;
         lasty = p->y;
     }
+
+    //
+    // QWKCODE TEXT
+    //
+    if (!parent->code->isHidden()) {
+
+        qwkactive = true;
+
+        // which line we hovering on?
+        if (hoveri > -1) {
+
+            // cursor to work with the document text
+            QTextCursor cursor(parent->code->document());
+
+            // look for line of code that includes the point we are
+            // hovering over so we can highlight it in the text edit
+            int indexin=0;
+            for (int i=0; i<codePoints.count();i++) {
+
+                // if between or at end this is the line we're hovering on
+                if ((hoveri >= codePoints[i]) &&
+                        (((i<codePoints.count()-1) && hoveri < codePoints[i+1])
+                        || (i==codePoints.count()-1))) {
+
+                        // we have found the line in coreStrings that we
+                        // move cursor, the line will be highlighted by the editor
+                        cursor.setPosition(indexin + codeStrings[i].length(), QTextCursor::MoveAnchor);
+
+                        // move the visible cursor and make visible
+                        parent->code->setTextCursor(cursor);
+                        parent->code->ensureCursorVisible();
+                        break;
+                }
+                indexin += codeStrings[i].length()+1;
+            }
+        }
+
+        qwkactive = false;
+    }
+
     return returning;
 }
 
@@ -974,7 +1222,7 @@ WorkoutWidget::createBlock(QPoint p)
             double rwidth = to.x() + (width/2) - points_[prev]->x;
 
             // bottom left
-            add = new WWPoint(this, to.x()-(width/2), 
+            add = new WWPoint(this, to.x()-(width/2),
                                     points_[prev]->y + (lwidth * ratio),
                                     false);
             adding << add;
@@ -994,7 +1242,7 @@ WorkoutWidget::createBlock(QPoint p)
             points_.insert(index++, add);
 
             // bottom right
-            add = new WWPoint(this, to.x()+(width/2), 
+            add = new WWPoint(this, to.x()+(width/2),
                                     points_[prev]->y + (rwidth * ratio),
                                     false);
             adding << add;
@@ -1068,7 +1316,7 @@ WorkoutWidget::selectAll()
     foreach(WWPoint *p, points_) {
 
         // if not selected, select it
-        if (p->selected==false) 
+        if (p->selected==false)
             p->selected=selected=true;
     }
     return selected;
@@ -1082,7 +1330,7 @@ WorkoutWidget::selectPoints()
     QRectF rect(onRect,atRect);
     foreach(WWPoint *p, points_) {
 
-        // experiment with deselecting when using a 
+        // experiment with deselecting when using a
         // rect selection tool since more often than
         // not I keep forgetting points are highlighted
         // XXX maybe a keyboard modifier in the future ?
@@ -1129,6 +1377,7 @@ WorkoutWidget::ergFileSelected(ErgFile *ergFile)
     foreach (WorkoutWidgetCommand *p, stack) delete p;
     stack.clear();
     stackptr = 0;
+    parent->saveAct->setEnabled(false);
     parent->undoAct->setEnabled(false);
     parent->redoAct->setEnabled(false);
     cursorBlock = selectionBlock = QPainterPath();
@@ -1140,10 +1389,15 @@ WorkoutWidget::ergFileSelected(ErgFile *ergFile)
     points_.clear();
 
     // we suport ERG but not MRC/CRS currently
-    if (ergFile && ergFile->format == ERG) {
+    if (ergFile && (ergFile->format == MRC || ergFile->format == ERG)) {
+
+        this->ergFile = ergFile;
 
         maxX_=0;
-        maxY_=300;
+        maxY_=400;
+
+        // get laps
+        laps_ = ergFile->Laps;
 
         // add points for this....
         foreach(ErgFilePoint point, ergFile->Points) {
@@ -1153,6 +1407,11 @@ WorkoutWidget::ergFileSelected(ErgFile *ergFile)
         }
 
         maxY_ *= 1.1f;
+
+    } else {
+
+        // not supported
+        this->ergFile = NULL;
     }
 
     // reset metrics etc
@@ -1163,10 +1422,75 @@ WorkoutWidget::ergFileSelected(ErgFile *ergFile)
 }
 
 void
-WorkoutWidget::recompute()
+WorkoutWidget::save()
+{
+    // if nothing doing don't save
+    if (stackptr <= 0) return;
+
+    // no ergfile?
+    if (ergFile == NULL) {
+        //XXX nothing for now - will need Save as...
+        return;
+    }
+
+    //
+    // IN CORE
+    //
+    // replace all the points - they are scaled to local CP
+    // so do not need to be scaled back, that happens when
+    // they are read/written to file on disk
+    ergFile->Points.clear();
+    ergFile->Duration = 0;
+    foreach(WWPoint *p, points_) {
+        ergFile->Points.append(ErgFilePoint(p->x * 1000, p->y, p->y));
+        ergFile->Duration = p->x * 1000; // whatever the last is
+    }
+
+    // force any other plots to take the changes
+    context->notifyErgFileSelected(ergFile);
+
+    //
+    // SAVE
+    //
+    QStringList errors;
+    if (ergFile->save(errors) == false) {
+
+        // save failed :(
+        //
+        // likely caused by unsupported format
+        QMessageBox msgBox;
+        msgBox.setText(tr("File save failed."));
+        msgBox.setInformativeText(errors.join("."));
+        msgBox.setStandardButtons(QMessageBox::Ok);
+        msgBox.setDefaultButton(QMessageBox::Ok);
+        msgBox.setIcon(QMessageBox::Critical);
+        msgBox.exec();
+
+    } else {
+
+        // if it succeeds then reset stuff
+        foreach (WorkoutWidgetCommand *p, stack) delete p;
+        stack.clear();
+        stackptr = 0;
+        parent->saveAct->setEnabled(false);
+        parent->undoAct->setEnabled(false);
+        parent->redoAct->setEnabled(false);
+
+    }
+
+    return;
+}
+
+void
+WorkoutWidget::recompute(bool editing)
 {
     //QTime timer;
     //timer.start();
+
+    //
+    // As data changes so must the selection/cursor
+    //
+    setBlockCursor();
 
     int rnum=-1;
     if (context->athlete->zones(false) == NULL ||
@@ -1198,6 +1522,8 @@ WorkoutWidget::recompute()
     int ctime = 0;
     double cwatts = 0;
 
+    double maxy=0;
+
     // resample the erg file into 1s samples
     foreach(WWPoint *p, points_) {
 
@@ -1211,8 +1537,13 @@ WorkoutWidget::recompute()
         }
 
         cwatts = p->y;
+        if (cwatts > maxy) maxy=cwatts;
     }
 
+    // rescale the yaxis
+    if (maxY_ > (maxy*2) && maxY_ > 400) maxY_ = maxy *1.5; // too big
+    if (maxY_ < maxy) maxY_ = maxy *1.5; // too small
+    if (maxy == 0) maxY_ = 400;
 
     //
     // COMPUTE KEY METRICS TSS/IF
@@ -1273,8 +1604,481 @@ WorkoutWidget::recompute()
     //
     // MEAN MAX [works but need to think about UI]
     //
-    RideFileCache::fastSearch(wattsArray, mmpArray);
+    RideFileCache::fastSearch(wattsArray, mmpArray, mmpOffsets);
     //qDebug()<<"RECOMPUTE:"<<timer.elapsed()<<"ms"<<wattsArray.count()<<"samples";
+
+    //
+    // SEARCH FOR IMPOSSIBLE TTE SECTIONS
+    //
+    QVector<long> integrated;
+    integrated.resize(wattsArray.size());
+    long rt=0;
+    int secs=wattsArray.size();
+    for(int i=0; i<wattsArray.size(); i++) {
+        rt += wattsArray[i];
+        integrated[i] = rt;
+    }
+
+    // clear what we found last time
+    efforts.clear();
+
+    for (int j=0; j<2; j++) {
+
+        // 2 iterations:- 85% sustained, then 100% or higher
+        WWEffort tte; tte.start = tte.duration = 0;
+
+        for (int i=0; i<secs; i++) {
+
+            // start out at 30 minutes and drop back to
+            // 2 minutes, anything shorter and we are done
+            int t = (secs-i-1) > 3600 ? 3600 : secs-i-1;
+
+            while (t > 120) {
+
+                // calculate the TTE for the joules in the interval
+                // starting at i seconds with duration t
+                // This takes the monod equation p(t) = W'/t + CP and
+                // solves for t, but the added complication of also
+                // accounting for the fact it is expressed in joules
+                // So take Joules = (W'/t + CP) * t and solving that
+                // for t gives t = (Joules - W') / CP
+                double tc = ((integrated[i+t]-integrated[i]) - WPRIME) / CP;
+                // NOTE FOR ABOVE: it is looking at accumulation AFTER this point
+                //                 not FROM this point, so we are looking 1s ahead of i
+                //                 which is why the interval is registered as starting
+                //                 at i+1 in the code below
+
+                // this is either a TTE or getting very close
+                if (tc >= (j ? t : (t*0.85))) {
+
+                    if (tte.start > (i+1) || (tte.duration+tte.start) < (i+t)) {
+
+                        tte.start = i + 1; // see NOTE above
+                        tte.duration = t;
+                        tte.joules = integrated[i+t]-integrated[i];
+                        tte.quality = tc / double(t);
+
+                        // add 100 or more on second round
+                        // quick way of doing overlapping
+                        if ((j && tc >= t) || (!j && tc < t)) efforts << tte;
+                    }
+
+
+                    // move on shorter/harder are just as bad
+                    t=0;
+
+                } else {
+
+                    t = tc;
+                    if (t<120)
+                        t=120;
+                }
+            }
+        }
+    }
+
+    // set the properties if not editing
+    if (!editing) {
+        qwkactive = true;
+        parent->code->document()->setPlainText(qwkcode());
+        qwkactive = false;
+    }
+}
+
+// as 1m or 60s etc
+static QString qduration(int t)
+{
+    if (t%60 == 0) return QString("%1m").arg(t/60);
+    else return QString("%1s").arg(t);
+}
+
+QString
+WorkoutWidget::qwkcode()
+{
+    codeStrings.clear();
+
+    int rnum=-1;
+    int CP=250; // default if none set
+    if (context->athlete->zones(false) != NULL &&
+        (rnum = context->athlete->zones(false)->whichRange(QDate::currentDate())) != -1) {
+        CP = context->athlete->zones(false)->getCP(rnum); // get actual value
+
+    }
+
+    // convert the points to a string that can be edited
+    // it is a list of sections separated by commas
+    // of the form
+    //
+    //       N - repeat N times
+    //     ttt - duration N[ms]
+    //    @iii - watts
+    //    @iii-ppp - from iii to ppp watts
+    //    rttt - recovery for ttt
+    //    @rrr - recovery watts
+    //    @rrr-sss - from rrr to sss watts
+    //
+    //    e.g.
+    //    4x10@300r3m@200  - 4 time 10 mins at 300W followed by 3m at 200w
+    //    5x30s@450r30s    - 5 times 30seconds at 450w followed by 30s at 'recovery'
+    //    20m@100-400       - 20 minutes going from 100w to 400w
+    //
+    //
+    //    XXX COME AND FIX THIS EXAMPLE XXX
+    //    A complete workout example;
+    //    3m@65,1@100r3@65,5x5@105r3@65,10@65
+    //
+    //    Which decodes as a "classic" 5x5 vo2max workout:
+    //    1) 3minute at 65% of CP to warm upXXX
+    //    2) 1minute at CP followed by 3 mins recovery at 65% of CP to blow away the cobwebsXXX
+    //    3) 5 sets of 5 minutes at 105% of CP with 3 minutes recovery at 65% of CPXXX
+    //    4) 10minutes at 65% of CP to cool downXXX
+
+    // just loop through for now doing xx@yy and optionally add rxx
+    if (points_.count() == 1) {
+        // just a single point?
+        codeStrings << QString("%1@%2").arg(qduration(points_[0]->x)).arg(points_[0]->y);
+        codePoints<<0;
+    }
+
+    // don't do recovery just yet
+    QStringList blocks;
+    QList<int> blockp; //map to index
+    QList<double>aps;
+
+    for (int i=0; i< (points_.count()-1); i++) {
+
+        QString section;
+        double ap=0;
+
+        // how long is this section ?
+        int duration = points_[i+1]->x - points_[i]->x;
+
+        // if duration is 0 its a rise, so move on 1
+        if (duration <=0) {
+
+            // we need to keep duplicate time points
+            // for round trip - these are ones that are
+            // between points at the same point in time
+            if (i==0 || points_[i]->x - points_[i-1]->x <= 0) {
+
+                // its a block
+                section = QString("0@%1-%2").arg(points_[i]->y).arg(points_[i+1]->y);
+                ap = points_[i]->y / CP * 100.0f;
+
+            } else {
+
+                // skip!
+                continue;
+            }
+        }
+
+        // is it a level or a rise?
+        if (doubles_equal(points_[i+1]->y, points_[i]->y)) {
+
+            // its a block
+            section = QString("%1@%2").arg(qduration(duration)).arg(points_[i]->y);
+            ap = points_[i]->y / CP * 100.0f;
+
+        } else {
+            // its a rise
+            section = QString("%1@%2-%3").arg(qduration(duration))
+                                         .arg(points_[i]->y)
+                                         .arg(points_[i+1]->y);
+            ap = ((points_[i]->y + points_[i+1]->y) / 2) / CP * 100.0f;
+        }
+
+        blocks << section;
+        blockp << i;
+        aps << ap;
+    }
+
+    // one code per block with not optimisation, so we now look for
+    // blocks followed by recovery so we can join them together as
+    // an effort followed by recovery
+    QStringList sections;
+    QList<int> sectionp;
+    for(int i=0; i<blocks.count(); i++) {
+        QString section = blocks[i];
+        sectionp << blockp[i];
+
+        // if we were above recovery and next is below recovery we have
+        // an effort followed by some recovery so join together
+        if ((i < aps.count() -1) && aps[i] > RECOVERY && aps[i+1]<aps[i] && aps[i+1] < RECOVERY && !blocks[i+1].startsWith("0@")) {
+            section += "r" + blocks[i+1];
+            i++;
+        }
+        sections << section;
+    }
+
+    // ok, we could probably do this in one loop
+    // above, but just to keep this maintainable
+    // we now run through the sections looking
+    // for repeats and adding Nx .. when there
+    // are 2 or more repeated blocks
+    codePoints.clear();
+    for(int i=0; i<sections.count();) {
+
+        // count dupes
+        int count=1;
+        for(int j=i+1; j<sections.count(); j++) {
+            if (sections[j] == sections[i])
+                count++;
+            else
+                break; // stop when end of matches
+        }
+
+        // multiple or no ..
+        if (count > 1) {
+            codeStrings << QString("%1x%2").arg(count).arg(sections[i]);
+            codePoints << sectionp[i];
+        } else {
+            codeStrings << sections[i];
+            codePoints << sectionp[i];
+        }
+
+        i += count;
+    }
+
+    // still not optimised to 4x ..
+    return codeStrings.join("\n");
+}
+
+void
+WorkoutWidget::hoverQwkcode()
+{
+    if (qwkactive == true) return;
+
+    // what line we on then?
+    int line = parent->code->document()->toPlainText().mid(0, parent->code->textCursor().position()).count('\n');
+
+    // bounds check
+    if (line >= codePoints.count()) return;
+
+    // from point to point needs highlighting
+    int from= codePoints[line];
+    int to= line+1 >= codePoints.count() ? points_.count()-1 : codePoints[line+1]-1;
+
+    // shared point, usually on a rise
+    if (from==to) to=from+1;
+
+    // if not in bound - maybe deleting in editor (?)
+    if (from <0 || from >=points_.count() || to <0 || to >= points_.count()) return;
+
+    // lets highlight where the cursor is
+    QPointF begin= transform(points_[from]->x, 0);
+    QPointF last = begin;
+    QPainterPath block(begin);
+
+    double sumJoules=0;
+    double sumTime=0;
+
+    for (int i=from; i<=to; i++) {
+
+        if (i>from) {
+            int time= points_[i]->x - points_[i-1]->x;
+            sumTime += time;
+            sumJoules += time * ((points_[i]->y + points_[i-1]->y)/2);
+        }
+        last= transform(points_[i]->x, points_[i]->y);
+        block.lineTo(last);
+    }
+    block.lineTo(last.x(), begin.y());
+    block.lineTo(begin);
+
+    // not already highlighted?
+    if (cursorBlock != block) {
+        cursorBlock = block;
+
+        // text
+        cursorBlockText = time_to_string(sumTime);
+        cursorBlockText2= QString("%1w").arg(sumJoules/sumTime, 0, 'f', 0);
+        update();
+    }
+}
+
+void
+WorkoutWidget::fromQwkcode(QString code)
+{
+    if (qwkactive == true) return;
+
+    // what it look like before?
+    QString before=qwkcode();
+
+    // apply ..
+    apply(code);
+
+    QString after=qwkcode();
+
+    // did anything materially change?
+    if (after != before) {
+        new QWKCommand(this, before, after);
+    }
+}
+
+
+void
+WorkoutWidget::apply(QString code)
+{
+
+    // clear points etc
+    state = none;
+    dragging = NULL;
+    cursorBlock = selectionBlock = QPainterPath();
+    cursorBlockText = selectionBlockText = cursorBlockText2 = selectionBlockText2 = "";
+
+    // wipe out points NEED TO COME BACK FOR REDO!!! XXX TODO XXX
+    foreach(WWPoint *point, points_) delete point;
+    points_.clear();
+
+    // keep a track of current load and time
+    int secs = 0;
+    int watts= 0;
+    int index=0;
+
+    // save away
+    codePoints.clear();
+    codeStrings = code.split("\n");
+
+    foreach(QString line, code.split("\n")) {
+
+        //
+        // QWKCODE syntax
+        //
+        // A line can be (using [] to express optionality
+        //
+        // [Nx]t1@w1[-w2][rt2@w3[-w4]]
+        //
+        // Where Nx      - Repeat N times
+        //       t1@w1   - Time t1 at Watts w1
+        //       -w2     - Optionally Time t from watts w1 to w2
+        //
+        //       rt2@w3  - Optional recovery time t2 at watts w3
+        //       -w4     - Optionally recover from time t2 watts w3 to watts w4
+        //
+        //       time t2/t2 can be expressed as a number and may
+        //       optionally be followed by m or s for minutes or seconds
+        //       if no units specified defaults to minutes
+        QRegExp qwk("([0-9]+x)?([0-9]+[ms]?)@([0-9]+)(-[0-9]+)?(r([0-9]+[ms]?)@([0-9]+)(-[0-9]+)?)?");
+
+        // REGEXP capture texts
+        //
+        // 0 - The entire line
+        // 1 - Count with trailing x e.g. "4x"
+        // 2 - Duration with trailing units (optional) e.g. "10m"
+        // 3 - Watts without units e.g. "120"
+        // 4 - Watts rise to with leading minus e.g. "-150"
+        // 5 - The entire recovery string (optional)
+        // 6 - Recovery Duration with trailing units (optional) e.g. "3m"
+        // 7 - Recovery watts without units e.g. "70"
+        // 8 - Recovert rise to with leading minus e.g. "-100"
+        //
+        // Obviously if not present then the captured text will be blank
+        // but we always get 9 captured texts.
+
+        // need a full match, we ignore malformed entries
+        if (qwk.exactMatch(line.trimmed())) {
+
+            codePoints << index;
+
+            // extract the values to use when adding
+            int count, t1, t2, w1, w2, w3, w4;
+
+            // initialise
+            count = 1;
+            t1 = t2 = w1 = w2 = w3 = w4 = -1;
+
+            // repeat ?
+            if (qwk.cap(1) != "") count=qwk.cap(1).mid(0, qwk.cap(1).length()-1).toInt();
+
+            // duration t1
+            if (qwk.cap(2) != "") {
+
+                // minutes
+                if (qwk.cap(2).endsWith("m")) {
+                    t1=qwk.cap(2).mid(0, qwk.cap(2).length()-1).toInt();
+                    t1 *= 60;
+
+                // seconds
+                } else if (qwk.cap(2).endsWith("s")) {
+                    t1=qwk.cap(2).mid(0, qwk.cap(2).length()-1).toInt();
+
+                // default minutes
+                } else {
+                    t1=qwk.cap(2).toInt();
+                    t1 *= 60;
+                }
+            }
+
+            // w1
+            if (qwk.cap(3) != "") w1 = qwk.cap(3).toInt();
+            // w2
+            if (qwk.cap(4) != "") w2 = -1 * qwk.cap(4).toInt();
+
+            // duration t2
+            if (qwk.cap(6) != "") {
+
+                // minutes
+                if (qwk.cap(6).endsWith("m")) {
+                    t2=qwk.cap(6).mid(0, qwk.cap(6).length()-1).toInt();
+                    t2 *= 60;
+
+                // seconds
+                } else if (qwk.cap(6).endsWith("s")) {
+                    t2=qwk.cap(6).mid(0, qwk.cap(6).length()-1).toInt();
+
+                // default minutes
+                } else {
+                    t2=qwk.cap(6).toInt();
+                    t2 *= 60;
+                }
+            }
+
+            // w3
+            if (qwk.cap(7) != "") w3 = qwk.cap(7).toInt();
+            // w4
+            if (qwk.cap(8) != "") w4 = -1 * qwk.cap(8).toInt();
+
+            //DEBUGqDebug()<<"PARSE:" << qwk.cap(0) <<"count:"<<count<<"EFFORT:"<<t1<<w1<<w2<<"RECOVERY:"<<t2<<w3<<w4;
+
+            //
+            // SET THE POINTS TO MATCH QWKCODE
+            //
+            for(int i=0; i<count; i++) {
+
+                // EFFORT
+                // add a point for starting watts if not already there
+                if (w1 != watts) {
+                    index++;
+                    new WWPoint(this, secs, w1);
+                }
+
+                // end of block
+                secs += t1;
+                watts = w2 > 0 ? w2 : w1;
+                index++;
+                new WWPoint(this, secs, watts);
+
+                // RECOVERY
+                if (t2 > 0) {
+                    if (w3 != watts) {
+                        index++;
+                        new WWPoint(this, secs, w3);
+                    }
+
+                    // end of recovery block
+                    secs += t2;
+                    watts = w4 >0 ? w4 : w3;
+                    index++;
+                    new WWPoint(this,secs,watts);
+                }
+            }
+        }
+    }
+    // recompute but critically don't redo qwkcode
+    recompute(true);
+
+    // repaint
+    update();
 }
 
 void
@@ -1298,9 +2102,36 @@ WorkoutWidget::configChanged(qint32)
     repaint();
 }
 
+struct tick_info_t {
+    double x;
+    char *label;
+};
+
+static tick_info_t tick_info[] = {
+    {         1,   (char*)"1s" },
+    {         5,   (char*)"5s" },
+    {        15,   (char*)"15s" },
+    {        30,   (char*)"30s" },
+    {        60,   (char*)"1m" },
+    {       120,   (char*)"2m" },
+    {       180,   (char*)"3m" },
+    {       240,   (char*)"4m" },
+    {       300,   (char*)"5m" },
+    {       600,   (char*)"10m" },
+    {       720,   (char*)"12m" },
+    {      1200,   (char*)"20m" },
+    {      1800,   (char*)"30m" },
+    {      3600,   (char*)"1h" },
+    {      7200,   (char*)"2h" },
+    {     10800,   (char*)"3h" },
+    {     18000,   (char*)"5h" },
+    {        -1,   (char*)NULL }
+};
 void
 WorkoutWidget::paintEvent(QPaintEvent*)
 {
+    QRectF c = canvas();
+
     QPainter painter(this);
     painter.save();
 
@@ -1330,9 +2161,12 @@ WorkoutWidget::paintEvent(QPaintEvent*)
     if (XTICLENGTH) painter.drawLine(bottom().topLeft(), bottom().topRight()); //X
 
     // start with 5 min tics and get longer and longer
-    int tsecs = 5 * 60; // 5 minute tics
+    int tsecs = 1 * 60; // 1 minute tics
     int xrange = maxX() - minX();
-    while (double(xrange) / double(tsecs) > XTICS) tsecs *= 2;
+    while (double(xrange) / double(tsecs) > XTICS && tsecs < xrange) {
+        if (tsecs==120) tsecs = 300;
+        else tsecs *= 2;
+    }
 
     // now paint them
     for(int i=minX(); i<=maxX(); i += tsecs) {
@@ -1411,6 +2245,26 @@ WorkoutWidget::paintEvent(QPaintEvent*)
     // now paint the points
     foreach(WorkoutWidgetItem*x, points_) x->paint(&painter);
 
+    // MMP uses a log scale
+    if (LOG) {
+
+        // paint tics for log scale on the canvas
+        QPen power(GColor(CPOWER));
+        painter.setPen(power);
+
+        // typical durations
+        for(int i=0; tick_info[i].x > 0 && tick_info[i].x < maxX(); i++) {
+            int x=logX(tick_info[i].x);
+            painter.drawLine(QPoint(x,c.top()), QPoint(x,c.top()+XTICLENGTH));
+
+            QString label = tick_info[i].label;
+            QRect bound = fontMetrics.boundingRect(label);
+            painter.drawText(QPoint(x - (bound.width() / 2),
+                                    c.top()+fontMetrics.ascent()+XTICLENGTH+(XTICLENGTH ? SPACING : 0)),
+                                    label);
+        }
+    }
+
     painter.restore();
 }
 
@@ -1433,6 +2287,13 @@ WorkoutWidget::bottom()
 {
     QRect all = geometry();
     return QRectF(LWIDTH, all.height() - BHEIGHT, all.width() - LWIDTH - RWIDTH, BHEIGHT);
+}
+
+QRectF
+WorkoutWidget::bottomgap()
+{
+    QRect all = geometry();
+    return QRectF(LWIDTH, all.height() - (IHEIGHT+BHEIGHT), all.width() - LWIDTH - RWIDTH, IHEIGHT);
 }
 
 QRectF
@@ -1465,18 +2326,60 @@ WorkoutWidget::maxY()
     return maxY_;
 }
 
+int
+WorkoutWidget::logX(double t)
+{
+    QRectF c = canvas();
+
+    // transform to logX coordinates for time t
+    double xratio = double(c.width()) / double(log(maxX())-(minX() > 0 ? log(minX()) : 0));
+    return c.x() + (xratio * log(t));
+}
+
 // transform from plot to painter co-ordinate
 QPoint
-WorkoutWidget::transform(double seconds, double watts)
+WorkoutWidget::transform(double seconds, double watts, RideFile::SeriesType s)
 {
     // from plot coords to painter coords on the canvas
     QRectF c = canvas();
 
-    // ratio of pixels to plot units
-    double yratio = double(c.height()) / (maxY()-minY());
-    double xratio = double(c.width()) / (maxX()-minX());
+    switch (s) {
 
-    return QPoint(c.x() + (seconds * xratio), c.bottomLeft().y() - (watts * yratio));
+    default:
+    case RideFile::watts:
+        {
+        // ratio of pixels to plot units
+        double yratio = double(c.height()) / (maxY()-minY());
+        double xratio = double(c.width()) / (maxX()-minX());
+
+        return QPoint(c.x() + (seconds * xratio), c.bottomLeft().y() - (watts * yratio));
+        }
+
+    case RideFile::hr:
+        {
+        // ratio of pixels to plot units
+        double yratio = double(c.height()) / double(hrMax);
+        double xratio = double(c.width()) / (maxX()-minX());
+
+        return QPoint(c.x() + (seconds * xratio), c.bottomLeft().y() - (watts * yratio));
+        }
+    case RideFile::cad:
+        {
+        // ratio of pixels to plot units
+        double yratio = double(c.height()) / double(cadenceMax);
+        double xratio = double(c.width()) / (maxX()-minX());
+
+        return QPoint(c.x() + (seconds * xratio), c.bottomLeft().y() - (watts * yratio));
+        }
+    case RideFile::kph:
+        {
+        // ratio of pixels to plot units
+        double yratio = double(c.height()) / double(speedMax);
+        double xratio = double(c.width()) / (maxX()-minX());
+
+        return QPoint(c.x() + (seconds * xratio), c.bottomLeft().y() - (watts * yratio));
+        }
+    }
 }
 
 // transform from painter to plot co-ordinate
@@ -1523,6 +2426,7 @@ WorkoutWidget::addCommand(WorkoutWidgetCommand *cmd)
     stackptr++;
 
     // set undo enabled, redo disabled
+    parent->saveAct->setEnabled(true);
     parent->undoAct->setEnabled(true);
     parent->redoAct->setEnabled(false);
 }
@@ -1538,7 +2442,10 @@ WorkoutWidget::redo()
     if (stackptr >= 0 && stackptr < stack.count()) stack[stackptr++]->redo();
 
     // disable/enable buttons
-    if (stackptr > 0) parent->undoAct->setEnabled(true);
+    if (stackptr > 0) {
+        parent->undoAct->setEnabled(true);
+        parent->saveAct->setEnabled(true);
+    }
     if (stackptr >= stack.count()) parent->redoAct->setEnabled(false);
 
     // recompute metrics
@@ -1559,7 +2466,10 @@ WorkoutWidget::undo()
     if (stackptr > 0) stack[--stackptr]->undo();
 
     // disable/enable button
-    if (stackptr <= 0) parent->undoAct->setEnabled(false);
+    if (stackptr <= 0) {
+        parent->saveAct->setEnabled(false);
+        parent->undoAct->setEnabled(false);
+    }
     if (stackptr < stack.count()) parent->redoAct->setEnabled(true);
 
     // recompute metrics
@@ -1569,20 +2479,224 @@ WorkoutWidget::undo()
     update();
 }
 
+// if no block is highlighted return false, otherwise true
+bool
+WorkoutWidget::getBlockSelected(QList<int>&copyIndexes,
+                                QList<int>&deleteIndexes,
+                                double &shift)
+{
+    // from first to last selected these are in scope
+    int begin=-1, end=-1;
+    for(int i=0; i<points_.count(); i++) {
+        if (points_[i]->selected) {
+            if (begin == -1) begin = i;
+            end = i;
+        }
+    }
+
+    // make sure there is some kind of selection
+    if (begin == -1 || end == -1 || begin == end || end < begin) return false;
+
+    // trim unwanted points from the front
+    int blockStarts=-1, blockFinishes=-1;
+
+    // j loops through the indexes of the points in scope
+    for(int index=begin; index<=end; index++) {
+
+        // index of this, next and previous points
+        int next = index < end ? index+1 : -1;
+
+        // we got to block end
+        if (next != -1 && points_[next]->x > points_[index]->x) {
+            blockStarts = index;
+            break;
+        }
+    }
+
+    // j loops back through the indexes of the points in scope
+    for(int index=end; index>=begin; index--) {
+
+        // index of this, next and previous points
+        int prev = index > begin ? (index-1) : - 1;
+
+        // we got to block end
+        if (prev != -1 && points_[prev]->x < points_[index]->x) {
+            blockFinishes = index;
+            break;
+        }
+    }
+
+    if (blockStarts == -1 || blockFinishes == -1 || blockStarts > blockFinishes) return false;
+
+    // what is the shift required to move points
+    // to the right across in a cut operation
+    shift = points_[blockFinishes]->x - points_[blockStarts]->x;
+
+    // what are the indexes we will put into the
+    // buffer in a copy operation
+    for(int i=blockStarts; i<=blockFinishes; i++)
+        copyIndexes << i;
+
+    // what are the indexes we would delete in
+    // a cut operation - for now same as copy
+    // but should really get rid of duplicate
+    // points esp. when multiple points for the
+    // same point in time XXX fix this later XXX
+    // as a result of shifting this happens a
+    // fair amount ............
+    deleteIndexes = copyIndexes;
+
+    // do we have something ?
+    if (copyIndexes.count() > 1) return true;
+
+    return false;
+}
+
 void
 WorkoutWidget::cut()
 {
-//qDebug()<<"cut";
+    QList<PointMemento>d,c;
+
+    QList<int> copyIndexes, deleteIndexes;
+    double shift=0;
+
+    // work out what we're doing
+    if (!getBlockSelected(copyIndexes, deleteIndexes, shift)) return;
+
+    // we cut and paste BLOCKS, not POINTS
+    // so this means we have to only get points
+    // that are part of the block we are cutting
+    // and also shift the points to the right
+    // across to the left to account for the
+    // blocks we removed.
+
+    // since copy also needs to do this we have
+    // the following utility
+
+    // copy points
+    foreach(int index, copyIndexes) {
+        WWPoint *p = points_[index];
+        c << PointMemento(p->x, p->y, index);
+    }
+    setClipboard(c);
+
+    // delete backwards
+    int last=-1;
+    for(int i=deleteIndexes.count()-1; i>=0; i--) {
+        WWPoint *take = points_.takeAt(deleteIndexes[i]);
+        d << PointMemento(take->x, take->y, deleteIndexes[i]);
+        delete take;
+        last = deleteIndexes[i];
+    }
+
+    // now shift the rest
+    for(int i=last; i >0 && i<points_.count(); i++) {
+        points_[i]->x -= shift;
+    }
+
+    // add the cut command
+    new CutCommand(this, c, d, shift);
+
+    // refresh
+    recompute();
+
+    // update the display
+    update();
 }
 
-void 
+void
 WorkoutWidget::copy()
 {
-//qDebug()<<"copy";
+    QList<PointMemento>d,c;
+
+    // to use getBlockSelected
+    QList<int> copyIndexes, deleteIndexes;
+    double shift=0;
+
+    // work out what we're doing
+    if (!getBlockSelected(copyIndexes, deleteIndexes, shift)) return;
+
+    // copy points
+    foreach(int index, copyIndexes) {
+        WWPoint *p = points_[index];
+        c << PointMemento(p->x, p->y, index);
+    }
+    setClipboard(c);
+}
+
+void
+WorkoutWidget::setClipboard(QList<PointMemento>&c)
+{
+    // always offset from zero
+    // for both time and indexes
+    double offset=0;
+    for(int i=0; i<c.count(); i++) {
+        if (i==0) offset=c[i].x;
+        c[i].x -= offset; // time starts from zero
+        c[i].index = i;   // indexes start from zero
+    }
+
+    // store it and set the action button
+    clipboard = c;
+    parent->pasteAct->setEnabled(c.count() > 0);
 }
 
 void
 WorkoutWidget::paste()
 {
-//qDebug()<<"paste";
+    // empty clipboard, nothing to do
+    if (clipboard.count() == 0) return;
+
+    // ok, so where to paste?
+    int here=-1;
+    int offset= points_.count() ? points_.last()->x : 0;
+
+    // search for a selected point
+    for(int i=points_.count()-1; i>=0; i--) {
+        if (points_[i]->selected) {
+            offset=points_[i]->x;
+            here=i+1;
+            break;
+        }
+    }
+
+    // if its the last point append!
+    if (here >= (points_.count())) here = -1;
+
+    double shift=0;
+    if (here != -1) {
+
+        // need to shift everyone across to make space
+        shift = clipboard.last().x;
+
+        for(int i=here; i<points_.count(); i++) {
+            points_[i]->x += shift;
+        }
+    }
+
+    // here is either the index to append after
+    // or we add to the end of the workout
+    foreach(PointMemento m, clipboard) {
+
+        if (here == -1) {
+            new WWPoint(this, m.x+offset, m.y);
+        } else {
+
+            WWPoint *add = new WWPoint(this, m.x+offset, m.y, false);
+            points_.insert(here + m.index, add);
+        }
+    }
+
+    // increase maxX ?
+    if (points_.count() && points_.last()->x > maxX_)
+        maxX_ = points_.last()->x;
+
+    // paste command
+    new PasteCommand(this, here, offset, shift, clipboard);
+
+    // refresh
+    recompute();
+
+    // update the display
+    update();
 }

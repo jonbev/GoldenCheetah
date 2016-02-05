@@ -304,6 +304,7 @@ struct FitFileReaderState
                 case 1561: case 1742: case 1821: rideFile->setDeviceType("Garmin Edge 510"); break;
                 case 1567: rideFile->setDeviceType("Garmin Edge 810"); break;
                 case 1623: rideFile->setDeviceType("Garmin FR620"); break;
+                case 1632: rideFile->setDeviceType("Garmin FR220"); break;
                 case 1765: case 2130: case 2131: case 2132: rideFile->setDeviceType("Garmin FR920XT"); break;
                 case 1836: case 2052: case 2053: case 2070: case 2100: rideFile->setDeviceType("Garmin Edge 1000"); break;
                 case 1903: rideFile->setDeviceType("Garmin FR15"); break;
@@ -749,7 +750,7 @@ struct FitFileReaderState
         time_t time = 0;
         if (time_offset > 0)
             time = last_time + time_offset;
-        double alt = 0, cad = 0, km = 0, hr = 0, lat = 0, lng = 0, badgps = 0, lrbalance = 0;
+        double alt = 0, cad = 0, km = 0, hr = 0, lat = 0, lng = 0, badgps = 0, lrbalance = RideFile::NA;
         double kph = 0, temperature = RideFile::NA, watts = 0, slope = 0;
         double leftTorqueEff = 0, rightTorqueEff = 0, leftPedalSmooth = 0, rightPedalSmooth = 0;
 
@@ -1175,8 +1176,8 @@ struct FitFileReaderState
                     last_time+i, 0.0, 0.0,
                     last_distance,
                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, RideFile::NA,
-                    0.0, 0.0, 0.0,
+                    0.0, 0.0, RideFile::NA, RideFile::NA,
+                    0.0, 0.0,
                     0.0, 0.0,
                     0.0, 0.0,
                     0.0, 0.0,
@@ -1201,15 +1202,15 @@ struct FitFileReaderState
                     last_time + i, cad, 0.0,
                     last_distance + (deltaDist * i/deltaSecs),
                     kph, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, RideFile::NA,
-                    0.0, 0.0, 0.0,
                     0.0, 0.0,
+                    RideFile::NA,RideFile::NA,
+                    0.0, 0.0,0.0, 0.0,
                     0.0, 0.0,
+                    0.0, 0.0,0.0, 0.0,
+                    0.0, 0.0,0.0, 0.0,
                     0.0, 0.0,
-                    0.0, 0.0,
-                    0.0, 0.0,
-                    0.0, 0.0,
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
+                    0.0, 0.0, 0.0, 0.0,
+                    0);
             }
             last_time += deltaSecs;
             last_distance += deltaDist;

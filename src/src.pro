@@ -467,11 +467,36 @@ contains(DEFINES, "GC_HAVE_KQOAUTH") {
 ### OPTIONAL => CLOUD DB [Google App Engine Integration]
 ###=====================================================
 
+##----------------------------------------------##
+## CloudDB is only supported on QT5.5 or higher ##
+##----------------------------------------------##
+
+notsupported = "INFO: CloudDB requires version QT >= 5.5, no support for"
+notsupported += $${QT_VERSION}
+
 equals(CloudDB, active) {
 
-    HEADERS += ChartExchange.h
-    SOURCES += ChartExchange.cpp
-    DEFINES += GC_HAS_CLOUD_DB
+    greaterThan(QT_MAJOR_VERSION, 4) {
+
+        greaterThan(QT_MINOR_VERSION, 4) {
+
+            HEADERS += CloudDBChart.h CloudDBCommon.h \
+                       CloudDBCurator.h CloudDBStatus.h
+            SOURCES += CloudDBChart.cpp CloudDBCommon.cpp \
+                       CloudDBCurator.cpp CloudDBStatus.cpp
+            DEFINES += GC_HAS_CLOUD_DB
+
+        } else {
+
+            # QT5 but not 5.5 or higher
+            message($$notsupported)
+        }
+
+    } else {
+
+        # QT4 not supported
+        message($$notsupported)
+    }
 }
 
 
@@ -549,6 +574,7 @@ HEADERS  += \
         ChartBar.h \
         ChartSettings.h \
         ChooseCyclistDialog.h \
+        ../qtsolutions/codeeditor/codeeditor.h \
         ColorButton.h \
         Colors.h \
         CommPort.h \
@@ -755,7 +781,8 @@ HEADERS  += \
         WorkoutWizard.h \
         WPrime.h \
         ZoneScaleDraw.h \
-        Zones.h
+        Zones.h \
+        ZwoParser.h
 
 
 ###=============
@@ -795,6 +822,7 @@ SOURCES += \
         ChartBar.cpp \
         ChartSettings.cpp \
         ChooseCyclistDialog.cpp \
+        ../qtsolutions/codeeditor/codeeditor.cpp \
         Coggan.cpp \
         ColorButton.cpp \
         Colors.cpp \
@@ -1022,7 +1050,8 @@ SOURCES += \
         WorkoutWindow.cpp \
         WorkoutWizard.cpp \
         WPrime.cpp \
-        Zones.cpp
+        Zones.cpp \
+        ZwoParser.cpp
 
 
 ###======================================

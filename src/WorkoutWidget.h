@@ -25,6 +25,7 @@
 
 #include "WPrime.h"
 
+#include "RideFile.h"
 #include "Settings.h"
 #include "Units.h"
 #include "Colors.h"
@@ -34,11 +35,15 @@
 #include <QPoint>
 #include <QVector>
 #include <QPainterPath>
+#include <QTimer>
+
+#include "../qtsolutions/codeeditor/codeeditor.h"
 
 class ErgFile;
 class WorkoutWindow;
 class WorkoutWidget;
 class WWPoint;
+class RealtimeData;
 
 // memento represent a point, used to save state before/after commands
 // or whilst in the process of creating things like blocks
@@ -94,6 +99,13 @@ class WorkoutWidgetCommand
         WorkoutWidget *workoutWidget_;
 };
 
+// TTE efforts
+struct WWEffort {
+    int start, duration, joules;
+    int zone;
+    double quality;
+};
+
 class WorkoutWidget : public QWidget
 {
     Q_OBJECT
@@ -101,6 +113,17 @@ class WorkoutWidget : public QWidget
     public:
 
         WorkoutWidget(WorkoutWindow *parent, Context *context);
+
+        // qwkode string
+        QString qwkcode();
+
+        // when recording we collect telemetry and plot it
+        bool recording() { return recording_; }
+        QList<int> wbal; // 1s samples [joules]
+        QList<int> watts; // 1s samples [watts]
+        QList<int> hr; // 1s samples [bpm]
+        QList<double> speed; // 1s samples [km/h]
+        QList<int> cadence; // 1s samples [rpm]
 
         // interaction state;
         // none - initial state
@@ -120,17 +143,25 @@ class WorkoutWidget : public QWidget
         // get list of my items
         QList<WWPoint*> &points() { return points_; }
 
+        // lap markers
+        QList<ErgFileLap> &laps() { return laps_; }
+
         // get WPrime values
         WPrime &wprime() { return wpBal; }
 
         // range for scales in plot units not draw units
         double maxX(); // e.g. max watts
+        void setMaxX(double x) { maxX_ = x; }
         double maxY(); // e.g. max seconds
         double minX() { return 0.0f; } // might change later
         double minY() { return 0.0f; } // might change later
 
         // transform from plot to painter co-ordinate
-        QPoint transform(double x, double y);
+        QPoint transform(double x, double y, RideFile::SeriesType s=RideFile::watts);
+
+        // for log(x) scale
+        int logX(double t);
+        bool logScale() { return LOG; }
 
         // transform from painter to plot co-ordinate
         QPointF reverseTransform(int, int);
@@ -140,12 +171,15 @@ class WorkoutWidget : public QWidget
 
         // CP data
         QVector<int> wattsArray;
-        QVector<int>mmpArray;
+        QVector<int> mmpArray, mmpOffsets;
+        QList<WWEffort> efforts;
 
         // get regions for items to paint in
+        void adjustLayout(); // sets margins etc
         QRectF left();
         QRectF right();
         QRectF bottom();
+        QRectF bottomgap();
         QRectF top();
         QRectF canvas();
 
@@ -174,13 +208,32 @@ class WorkoutWidget : public QWidget
         // the point we are currently dragging
         WWPoint *dragging;
 
+        // copy/paste buffer
+        void setClipboard(QList<PointMemento>&);
+        QList<PointMemento> clipboard;
+
    public slots:
+
+        // recording / editing
+        void start();
+        void stop();
+        void telemetryUpdate(RealtimeData rtData);
 
         // and erg file was selected
         void ergFileSelected(ErgFile *);
 
+        // save or save as (when erfile is NULL)
+        void save();
+
+        // qwkcode edited
+        void fromQwkcode(QString);
+        void apply(QString);
+
+        // user is cursoring through the qwkcode
+        void hoverQwkcode();
+
         // recompute metrics etc
-        void recompute();
+        void recompute(bool editing=false);
 
         // trap signals
         void configChanged(qint32);
@@ -223,6 +276,14 @@ class WorkoutWidget : public QWidget
         bool moveBlock(QPoint p);
         bool setBlockCursor();
 
+        // working with laps
+        bool setLapState(); // as mouse moves
+
+        // when a block is selected its quite complex to
+        // determine what to do in a copy/cut operation
+        bool getBlockSelected(QList<int>&copy, QList<int>&del, double &shift);
+
+        // integrating with the QT event loop
         void paintEvent(QPaintEvent *);
         bool eventFilter(QObject *obj, QEvent *event);
 
@@ -231,11 +292,20 @@ class WorkoutWidget : public QWidget
         WorkoutWindow *parent;
         Context *context;
         QList<WorkoutWidgetItem*> children_;
+        QTimer timer; // for click timeouts
 
         // we keep these separate to make the maintenance
         // and code simpler, it helps when moving them around
         // as don't have to keep searching through all objects
         QList<WWPoint*> points_;
+
+        // mapping the qwkcode text to the points
+        bool qwkactive; // we're editing it, not the user
+        QStringList codeStrings;
+        QList<int> codePoints; // index into points_ for each line
+
+        // the lap definitions
+        QList<ErgFileLap>   laps_;      // interval markers in the file
 
         double maxX_, maxY_;
 
@@ -245,6 +315,37 @@ class WorkoutWidget : public QWidget
 
         // for computing W'bal
         WPrime wpBal;
+
+        // sizing
+        double IHEIGHT;         // interval gap at bottom (used for TTE warning)
+        double THEIGHT;         // top section height (lap markers)
+        double BHEIGHT;         // height of bottom (x-axis)
+        double LWIDTH;          // width of left (Watts y-axis)
+        double RWIDTH;          // width of right (W'bal y-axis)
+        int XTICLENGTH;         // ticlength of x-axis
+        int YTICLENGTH;         // ticlength of y-axis (0 = no tics)
+        int XTICS;              // max number of tics
+        int YTICS;              // max number of tics
+        int SPACING;            // space between axis and labels
+        int XMOVE;              // how far to move X with cursor keys
+        int YMOVE;              // how far to move Y with cursor keys
+        bool GRIDLINES;         // show gridlines ? (e.g. hide in minimode)
+        bool LOG;               // use log x scale (always false, for now)
+
+        bool recording_;
+
+        // axis scaling
+        int cadenceMax;
+        int hrMax;
+        double speedMax;
+
+        // resampling when recording
+        double wbalSum;
+        double wattsSum;
+        double cadenceSum;
+        double speedSum;
+        double hrSum;
+        int count;
 };
 
 #endif // _GC_WorkoutWidget_h

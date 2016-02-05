@@ -41,6 +41,10 @@
 #define GCWW_BRECT     8 // block selection
 #define GCWW_MMPCURVE  9
 #define GCWW_SGUIDE    10 // smart guides appear as we drag
+#define GCWW_TTE       11 // highlight impossible sections
+#define GCWW_LAP       12 // lap markers
+#define GCWW_NOW       13 // now marker
+#define GCWW_TELEMETRY 14 // now marker
 
 //
 // ITEMS
@@ -83,6 +87,20 @@ class WWWBalScale : public WorkoutWidgetItem {
         Context *context; // for athlete zones etc
 };
 
+// mark regions of workout that are not possible
+class WWTTE : public WorkoutWidgetItem {
+
+    public :
+        WWTTE(WorkoutWidget *w) : WorkoutWidgetItem(w) { w->addItem(this); }
+
+        int type() { return GCWW_TTE; }
+
+        void paint(QPainter *painter);
+
+        // locate me
+        QRectF bounding() { return workoutWidget()->bottomgap(); }
+};
+
 class WWMMPCurve : public WorkoutWidgetItem {
 
     public:
@@ -99,12 +117,29 @@ class WWMMPCurve : public WorkoutWidgetItem {
 
 };
 
+// lap marker at top 
+class WWLap : public WorkoutWidgetItem {
+    public:
+
+        WWLap(WorkoutWidget *w) : WorkoutWidgetItem(w) { w->addItem(this); }
+
+        // Reimplement in children
+        int type() { return GCWW_LAP; }
+
+        void paint(QPainter *painter);
+
+        // locate me on the parent widget in paint coordinates
+        QRectF bounding() { return workoutWidget()->top(); }
+
+    private:
+};
+
 // is a point, can be manipulated ...
 class WWPoint : public WorkoutWidgetItem {
 
     public:
 
-        WWPoint(WorkoutWidget *w, double x, double y, bool append=true) : 
+        WWPoint(WorkoutWidget *w, double x, double y, bool append=true) :
                 WorkoutWidgetItem(w), hover(false), selected(false), selecting(false), x(x), y(y) { if (append) w->addPoint(this); }
 
         // Reimplement in children
@@ -119,7 +154,7 @@ class WWPoint : public WorkoutWidgetItem {
         bool selected;  // has been selected
         bool selecting; // in the process of being selected (rect tool)
 
-        double x, y;
+        int x, y;
 
     private:
         QRectF bound; // set when we paint
@@ -141,6 +176,26 @@ class WWLine : public WorkoutWidgetItem {
         QRectF bounding() { return QRectF(); }
 
     private:
+
+};
+
+// draws all the telemetry
+class WWTelemetry : public WorkoutWidgetItem {
+
+    public:
+
+        WWTelemetry(WorkoutWidget *w, Context *c) : WorkoutWidgetItem(w), context(c) { w->addItem(this); }
+
+        // Reimplement in children
+        int type() { return GCWW_TELEMETRY; }
+
+        void paint(QPainter *painter);
+
+        // locate me on the parent widget in paint coordinates
+        QRectF bounding() { return QRectF(); }
+
+    private:
+        Context *context;
 
 };
 
@@ -168,7 +223,7 @@ class WWRect : public WorkoutWidgetItem {
 // moving or dragging points or blocks around
 class WWSmartGuide : public WorkoutWidgetItem {
 
-    public: 
+    public:
 
         WWSmartGuide(WorkoutWidget *w) : WorkoutWidgetItem(w) { w->addItem(this); }
 
@@ -213,9 +268,6 @@ class WWBlockSelection : public WorkoutWidgetItem {
 
         // locate me on the parent widget in paint coordinates
         QRectF bounding();
-
-    private:
-        Context *context;
 };
 
 // draws the W'bal curve
@@ -227,6 +279,25 @@ class WWWBLine : public WorkoutWidgetItem {
 
         // Reimplement in children
         int type() { return GCWW_WBLINE; }
+
+        void paint(QPainter *painter);
+
+        // locate me on the parent widget in paint coordinates
+        QRectF bounding() { return QRectF(); }
+
+    private:
+        Context *context;
+};
+
+// draws the NOW bar when recording
+class WWNow : public WorkoutWidgetItem {
+
+    public:
+
+        WWNow(WorkoutWidget *w, Context *context) : WorkoutWidgetItem(w), context(context) { w->addItem(this); }
+
+        // Reimplement in children
+        int type() { return GCWW_NOW; }
 
         void paint(QPainter *painter);
 
@@ -320,4 +391,47 @@ class DeleteWPointsCommand : public WorkoutWidgetCommand
     private:
         QList<PointMemento> points;
 };
+
+class CutCommand : public WorkoutWidgetCommand
+{
+    public:
+
+        CutCommand(WorkoutWidget*w, QList<PointMemento> copyIndexes, QList<PointMemento> deleteIndexes, double shift);
+
+        void redo();
+        void undo();
+
+    private:
+        QList<PointMemento> copyIndexes, deleteIndexes;
+        double shift;
+};
+
+class PasteCommand : public WorkoutWidgetCommand
+{
+    public:
+
+        PasteCommand(WorkoutWidget*w, int here, double offset, double shift, QList<PointMemento> points);
+
+        void redo();
+        void undo();
+
+    private:
+        int here;
+        double offset, shift;
+        QList<PointMemento> points;
+};
+
+class QWKCommand : public WorkoutWidgetCommand
+{
+    public:
+
+        QWKCommand(WorkoutWidget *w, QString before, QString after);
+
+        void redo();
+        void undo();
+
+    private:
+        QString before, after;
+};
+
 #endif // _GC_WorkoutWidgetItems_h

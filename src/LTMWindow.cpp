@@ -33,7 +33,8 @@
 #include "HelpWhatsThis.h"
 
 #ifdef GC_HAS_CLOUD_DB
-#include "ChartExchange.h"
+#include "CloudDBCommon.h"
+#include "CloudDBChart.h"
 #include "GcUpgrade.h"
 #endif
 
@@ -219,7 +220,7 @@ LTMWindow::LTMWindow(Context *context) :
     QAction *exportConfig = new QAction(tr("Export Chart Configuration..."), this);
     addAction(exportConfig);
 #ifdef GC_HAS_CLOUD_DB
-    QAction *shareConfig = new QAction(tr("Share Chart Configuration..."), this);
+    QAction *shareConfig = new QAction(tr("Export Chart Configuration to CloudDB..."), this);
     addAction(shareConfig);
 #endif
     // the controls
@@ -1269,39 +1270,48 @@ LTMWindow::exportConfig()
 void
 LTMWindow::shareConfig()
 {
+    // check for CloudDB T&C acceptance
+    if (!(appsettings->cvalue(context->athlete->cyclist, GC_CLOUDDB_TC_ACCEPTANCE, false).toBool())) {
+        CloudDBAcceptConditionsDialog acceptDialog(context->athlete->cyclist);
+        acceptDialog.setModal(true);
+        if (acceptDialog.exec() == QDialog::Rejected) {
+            return;
+        };
+    }
+
     // collect the config to export
     QList<LTMSettings> mine;
     mine << settings;
     mine[0].title = mine[0].name = title();
 
-    ChartExchangeClient *c = new ChartExchangeClient();
     ChartAPIv1 chart;
-    chart.Name = title();
+    chart.Header.Name = title();
     int version = VERSION_LATEST;
-    chart.GcVersion =  QString::number(version);
+    chart.Header.GcVersion =  QString::number(version);
     LTMChartParser::serializeToQString(&chart.ChartXML, mine);
-    chart.ChartVersion = 1;
     QPixmap picture;
     menuButton->hide();
 #if QT_VERSION > 0x050000
-     picture = grab(geometry());
+    picture = grab(geometry());
 #else
     picture = QPixmap::grabWidget (this);
 #endif
     QBuffer buffer(&chart.Image);
     buffer.open(QIODevice::WriteOnly);
-    picture.save(&buffer, "JPG"); // writes pixmap into bytes in JPG format
+    picture.save(&buffer, "PNG"); // writes pixmap into bytes in PNG format (a bit larger than JPG - but much better in Quality when importing)
     buffer.close();
 
-    chart.CreatorId = appsettings->cvalue(context->athlete->cyclist, GC_ATHLETE_ID, "").toString();
+    chart.Header.CreatorId = appsettings->cvalue(context->athlete->cyclist, GC_ATHLETE_ID, "").toString();
+    chart.Header.Curated = false;
+    chart.Header.Deleted = false;
 
-    // now asks for the user fields
-    ChartExchangePublishDialog* dialog = new ChartExchangePublishDialog(chart);
-    dialog->setModal(true);
-    int ret;
-    if ((ret=dialog->exec()) == QDialog::Accepted) {
-       chart = dialog->getData();
-       bool ok = c->postChart(chart);
+    // now complete the chart with for the user manually added fields
+    CloudDBChartObjectDialog dialog(chart, context->athlete->cyclist);
+    if (dialog.exec() == QDialog::Accepted) {
+        CloudDBChartClient c;
+        if (c.postChart(dialog.getChart())) {
+            CloudDBDataStatus::setChartHeaderStale(true);
+        }
     }
 }
 #endif

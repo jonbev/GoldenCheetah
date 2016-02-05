@@ -460,6 +460,9 @@ ErgFilePlot::setNow(long /*msecs*/)
 void
 ErgFilePlot::performancePlot(RealtimeData rtdata)
 {
+    // don't update this plot if we are not running or are paused
+    if ((!context->isRunning) || (context->isPaused)) return;
+
     // we got some data
     // x is plotted in meters or micro-seconds
     double x = bydist ? (rtdata.getDistance() * 1000) : rtdata.getMsecs();
@@ -561,7 +564,7 @@ void CurveData::append(double *x, double *y, int count)
         d_y.resize(newSize);
     }
 
-    for (register int i = 0; i < count; i++) {
+    for (int i = 0; i < count; i++) {
         d_x[d_count + i] = x[i];
         d_y[d_count + i] = y[i];
     }

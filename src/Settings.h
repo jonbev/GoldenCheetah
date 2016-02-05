@@ -178,6 +178,7 @@
 #define GC_DEV_VIRTUAL                  "<global-trainmode>devicepostProcess"
 #define FORTIUS_FIRMWARE                "<global-trainmode>fortius/firmware"
 #define TRAIN_MULTI                     "<global-trainmode>train/multi"
+#define TRAIN_AUTOCONNECT               "<global-trainmode>train/autoconnect"
 #define GC_REMOTE_START                 "<global-trainmode>remote/start"
 #define GC_REMOTE_STOP                  "<global-trainmode>remote/stop"
 #define GC_REMOTE_LAP                   "<global-trainmode>remote/lap"
@@ -223,6 +224,11 @@
 #define GC_AUTOBACKUP_FOLDER            "<athlete-preferences>autobackup/folder"
 #define GC_AUTOBACKUP_PERIOD            "<athlete-preferences>autobackup/period"                  // how often is the Athlete Folder backuped up / 0 == never
 #define GC_AUTOBACKUP_COUNTER           "<athlete-preferences>autobackup/counter"                 // counts to the next backup
+
+#define GC_CLOUDDB_TC_ACCEPTANCE       "<athlete-preferences>clouddb/acceptance"                  // bool
+#define GC_CLOUDDB_TC_ACCEPTANCE_DATE  "<athlete-preferences>clouddb/acceptancedate"              // date/time string of acceptance
+#define GC_CLOUDDB_NICKNAME            "<athlete-preferences>clouddb/nickname"
+#define GC_CLOUDDB_EMAIL               "<athlete-preferences>clouddb/email"
 
 // ride navigator
 #define GC_NAVHEADINGS                  "<athlete-preferences>navigator/headings"
