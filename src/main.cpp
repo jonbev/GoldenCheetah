@@ -23,6 +23,7 @@
 #include "TrainDB.h"
 #include "Colors.h"
 #include "GcUpgrade.h"
+#include "IdleTimer.h"
 
 #include <QApplication>
 #include <QtGui>
@@ -217,6 +218,8 @@ main(int argc, char *argv[])
 
     // create the application -- only ever ONE regardless of restarts
     application = new QApplication(argc, argv);
+    IdleEventFilter idleFilter;
+    application->installEventFilter(&idleFilter);
 
 #ifdef Q_OS_MAC
     // get an autorelease pool setup
@@ -318,9 +321,13 @@ main(int argc, char *argv[])
         // Language setting (default to system locale)
         QVariant lang = appsettings->value(NULL, GC_LANG, QLocale::system().name());
 
-        // Load specific translation
+        // Load specific translation, try from GCROOT otherwise from binary
         QTranslator gcTranslator;
-        gcTranslator.load(":translations/gc_" + lang.toString() + ".qm");
+        QString translation_file = "/gc_" + lang.toString() + ".qm";
+        if (gcTranslator.load(gcroot + translation_file))
+            qDebug() << "Loaded translation from"+gcroot+translation_file;
+        else
+            gcTranslator.load(":translations" + translation_file);
         application->installTranslator(&gcTranslator);
 
         // Initialize metrics once the translator is installed

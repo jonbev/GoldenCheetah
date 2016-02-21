@@ -137,10 +137,17 @@ MainWindow::MainWindow(const QDir &home)
     head = NULL; // early resize event causes a crash
 #endif
 
+    // create a splash to keep user informed on first load
+    // first one in middle of display, not middle of window
+    setSplash(true);
+
     // bootstrap
     Context *context = new Context(this);
     context->athlete = new Athlete(context, home);
     currentTab = new Tab(context);
+
+    // get rid of splash when currentTab is shown
+    clearSplash();
 
     setWindowIcon(QIcon(":images/gc.png"));
     setWindowTitle(context->athlete->home->root().dirName());
@@ -370,7 +377,10 @@ MainWindow::MainWindow(const QDir &home)
     head->addWidget(new Spacer(this));
     head->addWidget(viewsel);
 
+    // SearchBox and its animator
     searchBox = new SearchFilterBox(this,context,false);
+    anim = new QPropertyAnimation(searchBox, "xwidth", this);
+
 #if QT_VERSION > 0x50000
     QStyle *toolStyle = QStyleFactory::create("fusion");
 #else
@@ -502,6 +512,8 @@ MainWindow::MainWindow(const QDir &home)
 
     // add a search box on far right, but with a little space too
     searchBox = new SearchFilterBox(this,context,false);
+    anim = new QPropertyAnimation(searchBox, "xwidth", this);
+
     searchBox->setStyle(toolStyle);
     searchBox->setFixedWidth(150);
     head->addWidget(searchBox);
@@ -818,6 +830,49 @@ MainWindow::MainWindow(const QDir &home)
  *--------------------------------------------------------------------*/
 
 void
+MainWindow::setSplash(bool first)
+{
+    // new frameless widget
+    splash = new QWidget(NULL);
+
+    // modal dialog with no parent so we set it up as a 'splash'
+    // because QSplashScreen doesn't seem to work (!!)
+    splash->setAttribute(Qt::WA_DeleteOnClose);
+    splash->setWindowFlags(splash->windowFlags() | Qt::FramelessWindowHint);
+#ifdef Q_OS_LINUX
+    splash->setWindowFlags(splash->windowFlags() | Qt::X11BypassWindowManagerHint);
+#endif
+
+    // put widgets on it
+    progress = new QLabel(splash);
+    progress->setAlignment(Qt::AlignCenter);
+    QHBoxLayout *l = new QHBoxLayout(splash);
+    l->addWidget(progress);
+
+    // lets go
+    splash->setFixedSize(100,50);
+
+    if (first) {
+        // middle of screen
+        splash->move(desktop->availableGeometry().center()-QPoint(50, 25));
+    } else {
+        // middle of mainwindow is appropriate
+        splash->move(geometry().center()-QPoint(50, 25));
+    }
+    splash->show();
+
+    // reset the splash counter
+    loading=1;
+}
+
+void
+MainWindow::clearSplash()
+{
+    progress = NULL;
+    splash->close();
+}
+
+void
 MainWindow::toggleSidebar()
 {
     currentTab->toggleSidebar();
@@ -835,14 +890,14 @@ MainWindow::showSidebar(bool want)
 void
 MainWindow::toggleLowbar()
 {
-    if (currentTab->hasBottom()) currentTab->setShowBottom(!currentTab->isShowBottom());
+    if (currentTab->hasBottom()) currentTab->setBottomRequested(!currentTab->isBottomRequested());
     setToolButtons();
 }
 
 void
 MainWindow::showLowbar(bool want)
 {
-    if (currentTab->hasBottom()) currentTab->setShowBottom(want);
+    if (currentTab->hasBottom()) currentTab->setBottomRequested(want);
     showhideLowbar->setChecked(want);
     setToolButtons();
 }
@@ -1010,20 +1065,21 @@ MainWindow::resizeEvent(QResizeEvent*)
 #if (defined Q_OS_MAC) && (QT_VERSION >= 0x50201)
     if (head) {
         QRect screenSize = desktop->availableGeometry();
-        if ((screenSize.width() > frameGeometry().width() || screenSize.height() > frameGeometry().height()) && // not fullscreen
-           (!head->isVisible() && showhideToolbar->isChecked())) // not visible and we want it
-            head->show();
-        else if ((screenSize.width() == frameGeometry().width() || screenSize.height() == frameGeometry().height()) && // fullscreen
-           (head->isVisible())) // and it is visible
+        if ((screenSize.width() == frameGeometry().width() || screenSize.height() == frameGeometry().height()) && // fullscreen
+           (head->isVisible())) {// and it is visible
             head->hide();
+            head->updateGeometry();
+            head->show();
+            head->updateGeometry();
+        }
 
         // painting
-        head->updateGeometry();
-        repaint();
+        head->repaint();
     }
 #endif
-    appsettings->setValue(GC_SETTINGS_MAIN_GEOM, saveGeometry());
-    appsettings->setValue(GC_SETTINGS_MAIN_STATE, saveState());
+
+    //appsettings->setValue(GC_SETTINGS_MAIN_GEOM, saveGeometry());
+    //appsettings->setValue(GC_SETTINGS_MAIN_STATE, saveState());
 }
 
 void
@@ -1246,7 +1302,7 @@ void
 MainWindow::setToolButtons()
 {
     int select = currentTab->isTiled() ? 1 : 0;
-    int lowselected = currentTab->isShowBottom() ? 1 : 0;
+    int lowselected = currentTab->isBottomRequested() ? 1 : 0;
 
     styleAction->setChecked(select);
     showhideLowbar->setChecked(lowselected);
@@ -1286,6 +1342,12 @@ MainWindow::setToolButtons()
     case 3:
         index = 2; // train
     }
+#endif
+#ifdef Q_OS_MAC // bizarre issue with searchbox focus on tab voew change
+    anim->stop();
+    searchBox->clearFocus();
+    searchFocusOut();
+    scopebar->setFocus(Qt::TabFocusReason);
 #endif
     scopebar->setSelected(index);
 }
@@ -1655,12 +1717,18 @@ MainWindow::openTab(QString name)
 
     setUpdatesEnabled(false);
 
+    // splash screen - progress whilst loading tab
+    setSplash();
+
     // bootstrap
     Context *context = new Context(this);
     context->athlete = new Athlete(context, home);
 
     // now open up a new tab
     currentTab = new Tab(context);
+
+    // clear splash - progress whilst loading tab
+    clearSplash();
 
     // first tab
     tabs.insert(currentTab->context->athlete->home->root().dirName(), currentTab);
@@ -2114,7 +2182,15 @@ MainWindow::uploadGoogleDrive()
     // upload current ride, if we have one
     if (currentTab->context->ride) {
         GoogleDrive gd(currentTab->context);
-        FileStore::upload(this, &gd, currentTab->context->ride);
+        QStringList errors;        
+        if (gd.open(errors) && errors.empty()) {
+            // NOTE(gille): GoogleDrive is a little "wonky". We need to read
+            // the directory before we can upload to it. It's just how it is..
+            gd.readdir(gd.home(), errors);
+            if (errors.empty()) {
+                FileStore::upload(this, &gd, currentTab->context->ride);
+            }
+        } // TODO(gille): How to bail properly?
     }
 }
 
@@ -2307,17 +2383,19 @@ MainWindow::ridesAutoImport() {
 void
 MainWindow::searchFocusIn()
 {
-    QPropertyAnimation *anim = new QPropertyAnimation(searchBox, "xwidth", this);
-    anim->setDuration(300);
-    anim->setEasingCurve(QEasingCurve::InOutQuad);
-    anim->setStartValue(searchBox->width());
-    anim->setEndValue(350);
-    anim->start(QPropertyAnimation::DeleteWhenStopped);
+    if (searchBox->searchbox->hasFocus()) {
+        anim->setDuration(300);
+        anim->setEasingCurve(QEasingCurve::InOutQuad);
+        anim->setStartValue(searchBox->width());
+        anim->setEndValue(350);
+        anim->start();
+    }
 }
 
 void
 MainWindow::searchFocusOut()
 {
+    anim->stop();
     searchBox->setFixedWidth(150);
 }
 

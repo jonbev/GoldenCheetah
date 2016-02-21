@@ -30,27 +30,19 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     setProperty("color", GColor(CTRAINPLOTBACKGROUND));
 
     setControls(NULL);
+    ergFile = NULL;
 
     QVBoxLayout *main = new QVBoxLayout(this);
     QHBoxLayout *layout = new QHBoxLayout;
+    QVBoxLayout *editor = new QVBoxLayout;
 
     connect(context, SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));
 
     // the workout scene
     workout = new WorkoutWidget(this, context);
 
-    // paint the W'bal curve
+    // paint the TTE curve
     mmp = new WWMMPCurve(workout);
-
-    // add the power, W'bal scale
-    powerscale = new WWPowerScale(workout, context);
-    wbalscale = new WWWBalScale(workout, context);
-
-    // lap markers
-    lap = new WWLap(workout);
-
-    // tte warning bar at bottom
-    tte = new WWTTE(workout);
 
     // add a line between the dots
     line = new WWLine(workout);
@@ -64,6 +56,19 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     // paint the W'bal curve
     wbline = new WWWBLine(workout, context);
 
+    // telemetry
+    telemetry = new WWTelemetry(workout, context);
+
+    // add the power, W'bal scale
+    powerscale = new WWPowerScale(workout, context);
+    wbalscale = new WWWBalScale(workout, context);
+
+    // lap markers
+    lap = new WWLap(workout);
+
+    // tte warning bar at bottom
+    tte = new WWTTE(workout);
+
     // selection tool
     rect = new WWRect(workout);
 
@@ -72,7 +77,10 @@ WorkoutWindow::WorkoutWindow(Context *context) :
 
     // recording ...
     now = new WWNow(workout, context);
-    telemetry = new WWTelemetry(workout, context);
+
+    // scroller, hidden until needed
+    scroll = new QScrollBar(Qt::Horizontal, this);
+    scroll->hide();
 
     // setup the toolbar
     toolbar = new QToolBar(this);
@@ -80,15 +88,20 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     toolbar->setFloatable(true);
     toolbar->setIconSize(QSize(18,18));
 
+    QIcon newIcon(":images/toolbar/new doc.png");
+    newAct = new QAction(newIcon, tr("New"), this);
+    connect(newAct, SIGNAL(triggered()), this, SLOT(newFile()));
+    toolbar->addAction(newAct);
+
     QIcon saveIcon(":images/toolbar/save.png");
     saveAct = new QAction(saveIcon, tr("Save"), this);
     connect(saveAct, SIGNAL(triggered()), this, SLOT(saveFile()));
     toolbar->addAction(saveAct);
 
-    QIcon propertiesIcon(":images/toolbar/properties.png");
-    propertiesAct = new QAction(propertiesIcon, tr("Properties"), this);
-    connect(propertiesAct, SIGNAL(triggered()), this, SLOT(properties()));
-    toolbar->addAction(propertiesAct);
+    QIcon saveAsIcon(":images/toolbar/saveas.png");
+    saveAsAct = new QAction(saveAsIcon, tr("Save As"), this);
+    connect(saveAsAct, SIGNAL(triggered()), this, SLOT(saveAs()));
+    toolbar->addAction(saveAsAct);
 
     toolbar->addSeparator();
 
@@ -144,6 +157,23 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     toolbar->addAction(pasteAct);
     connect(pasteAct, SIGNAL(triggered()), workout, SLOT(paste()));
 
+    toolbar->addSeparator();
+
+    QIcon propertiesIcon(":images/toolbar/properties.png");
+    propertiesAct = new QAction(propertiesIcon, tr("Properties"), this);
+    connect(propertiesAct, SIGNAL(triggered()), this, SLOT(properties()));
+    toolbar->addAction(propertiesAct);
+
+    QIcon zoomInIcon(":images/toolbar/zoom in.png");
+    zoomInAct = new QAction(zoomInIcon, tr("Zoom In"), this);
+    connect(zoomInAct, SIGNAL(triggered()), this, SLOT(zoomIn()));
+    toolbar->addAction(zoomInAct);
+
+    QIcon zoomOutIcon(":images/toolbar/zoom out.png");
+    zoomOutAct = new QAction(zoomOutIcon, tr("Zoom Out"), this);
+    connect(zoomOutAct, SIGNAL(triggered()), this, SLOT(zoomOut()));
+    toolbar->addAction(zoomOutAct);
+
     // stretch the labels to the right hand side
     QWidget *empty = new QWidget(this);
     empty->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
@@ -176,7 +206,9 @@ WorkoutWindow::WorkoutWindow(Context *context) :
 
     // WATTS and Duration for the cursor
     main->addWidget(toolbar);
-    layout->addWidget(workout);
+    editor->addWidget(workout);
+    editor->addWidget(scroll);
+    layout->addLayout(editor);
     layout->addWidget(code);
     main->addLayout(layout);
 
@@ -185,6 +217,9 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     undoAct->setEnabled(false);
     redoAct->setEnabled(false);
 
+    // watch for erg file selection
+    connect(context, SIGNAL(ergFileSelected(ErgFile*)), this, SLOT(ergFileSelected(ErgFile*)));
+
     // watch for erg run/stop
     connect(context, SIGNAL(start()), this, SLOT(start()));
     connect(context, SIGNAL(stop()), this, SLOT(stop()));
@@ -192,6 +227,9 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     // text changed
     connect(code, SIGNAL(textChanged()), this, SLOT(qwkcodeChanged()));
     connect(code, SIGNAL(cursorPositionChanged()), workout, SLOT(hoverQwkcode()));
+
+    // scrollbar
+    connect(scroll, SIGNAL(sliderMoved(int)), this, SLOT(scrollMoved()));
 
     // set the widgets etc
     configChanged(CONFIG_APPEARANCE);
@@ -219,6 +257,7 @@ WorkoutWindow::configChanged(qint32)
     xlabel->setFixedWidth(fm.boundingRect(" 00:00:00 ").width());
     ylabel->setFixedWidth(fm.boundingRect(" 1000w ").width());
 
+    scroll->setStyleSheet(TabView::ourStyleSheet());
     toolbar->setStyleSheet(QString("::enabled { background: %1; color: %2; border: 0px; } ")
                            .arg(GColor(CTRAINPLOTBACKGROUND).name())
                            .arg(GCColor::invertColor(GColor(CTRAINPLOTBACKGROUND)).name()));
@@ -248,6 +287,10 @@ WorkoutWindow::configChanged(qint32)
         palette.setColor(QPalette::Base, GColor(CTRAINPLOTBACKGROUND));
         palette.setColor(QPalette::Window, GColor(CTRAINPLOTBACKGROUND));
     }
+
+#ifndef Q_OS_MAC // the scrollers appear when needed on Mac, we'll keep that
+    code->setStyleSheet(TabView::ourStyleSheet());
+#endif
 
     palette.setColor(QPalette::WindowText, GCColor::invertColor(GColor(CTRAINPLOTBACKGROUND)));
     palette.setColor(QPalette::Text, GCColor::invertColor(GColor(CTRAINPLOTBACKGROUND)));
@@ -293,9 +336,152 @@ WorkoutWindow::eventFilter(QObject *obj, QEvent *event)
 }
 
 void
+WorkoutWindow::zoomIn()
+{
+    setScroller(workout->zoomIn());
+}
+
+void
+WorkoutWindow::zoomOut()
+{
+    setScroller(workout->zoomOut());
+}
+
+void
+WorkoutWindow::setScroller(QPointF v)
+{
+    double minVX=v.x();
+    double maxVX=v.y();
+
+    // do we even need it ?
+    double vwidth = maxVX - minVX;
+    if (vwidth >= workout->maxWX()) {
+        // it needs to be hidden, the view fits
+        scroll->hide();
+    } else {
+        // we need it, so set to right place
+        scroll->setMinimum(0);
+        scroll->setMaximum(workout->maxWX() - vwidth);
+        scroll->setPageStep(vwidth);
+        scroll->setValue(minVX);
+
+        // and show
+        scroll->show();
+    }
+}
+
+void
+WorkoutWindow::scrollMoved()
+{
+    // is it visible!?
+    if (!scroll->isVisible()) return;
+
+    // just move the view as needed
+    double minVX = scroll->value();
+
+    // now set the view
+    workout->setMinVX(minVX);
+    workout->setMaxVX(minVX + scroll->pageStep());
+
+    // bleck
+    workout->setBlockCursor();
+
+    // repaint
+    workout->update();
+}
+
+void
+WorkoutWindow::ergFileSelected(ErgFile*f)
+{
+    if (active) return;
+
+    if (workout->isDirty()) {
+        QMessageBox msgBox;
+        msgBox.setText(tr("You have unsaved changes to a workout."));
+        msgBox.setInformativeText(tr("Do you want to save them?"));
+        msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        msgBox.setDefaultButton(QMessageBox::Cancel);
+        msgBox.setIcon(QMessageBox::Warning);
+        msgBox.exec();
+
+        // save first, otherwise changes lost
+        if(msgBox.clickedButton() == msgBox.button(QMessageBox::Yes)) {
+            active = true;
+            saveFile();
+            active = false;
+        }
+    }
+
+    // just get on with it.
+    ergFile = f;
+    workout->ergFileSelected(f);
+
+    // almost certainly hides it on load
+    setScroller(QPointF(workout->minVX(), workout->maxVX()));
+}
+
+void
+WorkoutWindow::newFile()
+{
+    // new blank file clear points .. texts .. metadata etc
+    ergFileSelected(NULL);
+}
+
+void
+WorkoutWindow::saveAs()
+{
+    QString filename = QFileDialog::getSaveFileName(this, tr("Save Workout File"),
+                                                    appsettings->value(this, GC_WORKOUTDIR, "").toString(),
+                                                    "New Workout.erg (*.erg)");
+
+    // if they didn't select, give up.
+    if (filename.isEmpty()) {
+        return;
+    }
+
+    // New ergfile will be created almost empty
+    ErgFile *newergFile = new ErgFile(context);
+
+    // we need to set sensible defaults for
+    // all the metadata in the file.
+    newergFile->Version = "2.0";
+    newergFile->Units = "";
+    newergFile->Filename = QFileInfo(filename).fileName();
+    newergFile->filename = filename;
+    newergFile->Name = "New Workout";
+    newergFile->Ftp = newergFile->CP;
+    newergFile->valid = true;
+    newergFile->format = ERG; // default to couse until we know
+
+    // if we're save as from an existing keep all the data
+    // EXCEPT filename, which has just been changed!
+    if (ergFile) newergFile->setFrom(ergFile);
+
+    // Update with whatever is currently in editor
+    workout->updateErgFile(newergFile);
+
+    // select new workout
+    workout->ergFileSelected(newergFile);
+
+    // write file
+    workout->save();
+
+    // add to collection with new name, a single new file
+    Library::importFiles(context, QStringList(filename));
+}
+
+void
 WorkoutWindow::saveFile()
 {
-    workout->save();
+    // if ergFile is null we need to save as, with the current
+    // edit state being held by the workout editor
+    // otherwise just write it to disk straight away as its
+    // an existing ergFile we just need to write to
+    if (ergFile) workout->save();
+    else saveAs();
+
+    // force any other plots to take the changes
+    context->notifyErgFileSelected(ergFile);
 }
 
 void
@@ -332,6 +518,7 @@ void
 WorkoutWindow::start()
 {
     recording = true;
+    scroll->hide();
     toolbar->hide();
     code->hide();
     workout->start();

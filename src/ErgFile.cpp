@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include "Units.h"
+#include "Utils.h"
 
 // Supported file types
 static QStringList supported;
@@ -48,7 +49,7 @@ bool ErgFile::isWorkout(QString name)
     }
     return false;
 }
-ErgFile::ErgFile(QString filename, int &mode, Context *context) :
+ErgFile::ErgFile(QString filename, int mode, Context *context) :
     filename(filename), context(context), mode(mode)
 {
     if (context->athlete->zones(false)) {
@@ -67,6 +68,21 @@ ErgFile::ErgFile(Context *context) : context(context), mode(nomode)
         CP = 300;
     }
     filename ="";
+}
+
+void
+ErgFile::setFrom(ErgFile *f)
+{
+    // don't rename it !
+    QString filename=this->filename;
+    QString Filename=this->filename;
+
+    // take a copy
+    *this = *f;
+
+    // keep filename
+    this->filename = filename;
+    this->Filename = Filename;
 }
 
 ErgFile *
@@ -592,24 +608,6 @@ ErgFile::Sections()
     return returning;
 }
 
-// when writing xml...
-static QString xmlprotect(QString string)
-{
-    QTextEdit trademark("&#8482;"); // process html encoding of(TM)
-    QString tm = trademark.toPlainText();
-
-    QString s = string;
-    s.replace( tm, "&#8482;" );
-    s.replace( "&", "&amp;" );
-    s.replace( ">", "&gt;" );
-    s.replace( "<", "&lt;" );
-    s.replace( "\"", "&quot;" );
-    s.replace( "\'", "&apos;" );
-    s.replace( "\n", "\\n" );
-    s.replace( "\r", "\\r" );
-    return s;
-}
-
 bool
 ErgFile::save(QStringList &errors)
 {
@@ -807,13 +805,13 @@ ErgFile::save(QStringList &errors)
         out << "<workout_file>\n";
 
         // metadata at top
-        if (Name != "") out << "    <name>"<<xmlprotect(Name)<<"</name>\n";
-        if (Source != "") out << "    <author>"<<xmlprotect(Source)<<"</author>\n";
-        if (Description != "") out << "    <description>"<<xmlprotect(Description)<<"</description>\n";
+        if (Name != "") out << "    <name>"<<Utils::xmlprotect(Name)<<"</name>\n";
+        if (Source != "") out << "    <author>"<<Utils::xmlprotect(Source)<<"</author>\n";
+        if (Description != "") out << "    <description>"<<Utils::xmlprotect(Description)<<"</description>\n";
         if (Tags.count()) {
             out << "    <tags>\n";
             foreach(QString tag, Tags)
-                out << "        <tag>"<<xmlprotect(tag)<<"</tag>\n";
+                out << "        <tag>"<<Utils::xmlprotect(tag)<<"</tag>\n";
             out << "    </tags>\n";
         }
 

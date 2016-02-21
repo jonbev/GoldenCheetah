@@ -27,12 +27,14 @@
 #include "TrainDB.h"
 #include "RideNavigator.h"
 #include "MainWindow.h"
+#include "IdleTimer.h"
 
 #include "Settings.h"
 
 TabView::TabView(Context *context, int type) : 
     QWidget(context->tab), context(context), type(type),
-    _sidebar(true), _tiled(false), _selected(false), lastHeight(130), sidewidth(0), active(false),
+    _sidebar(true), _tiled(false), _selected(false), lastHeight(130), sidewidth(0),
+    active(false), bottomRequested(false), bottomHideOnIdle(false),
     stack(NULL), splitter(NULL), mainSplitter(NULL), 
     sidebar_(NULL), bottom_(NULL), page_(NULL), blank_(NULL)
 {
@@ -61,6 +63,7 @@ TabView::TabView(Context *context, int type) :
 
     QString heading = tr("Compare Activities and Intervals");
     if (type == VIEW_HOME) heading = tr("Compare Date Ranges");
+    else if (type == VIEW_TRAIN) heading = tr("Intensity Adjustments and Workout Control");
 
     mainSplitter = new ViewSplitter(Qt::Vertical, heading, this);
     mainSplitter->setHandleWidth(23);
@@ -73,6 +76,8 @@ TabView::TabView(Context *context, int type) :
 
     connect(splitter,SIGNAL(splitterMoved(int,int)), this, SLOT(splitterMoved(int,int)));
     connect(context,SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));
+    connect(&IdleTimer::getInstance(), SIGNAL(userIdle()), this, SLOT(onIdle()));
+    connect(&IdleTimer::getInstance(), SIGNAL(userActive()), this, SLOT(onActive()));
 }
 
 TabView::~TabView()
@@ -191,26 +196,28 @@ TabView::ourStyleSheet()
            "}"
            "QScrollBar:horizontal {"
            "    border: 0px solid darkGray; "
-           "    background:%1;"
-           "    width: 8px;    "
+           "    background-color:%1;"
+           "    height: 8px;    "
            "    margin: 1px 1px 1px 1px;"
            "}"
            "QScrollBar::handle:horizontal {"
            "    background: darkGray; "
-           "    min-height: 0px;"
+           "    min-width: 0px;"
            ""
            "}"
+           "QScrollBar::sub-page:horizontal { background: %1; }"
+           "QScrollBar::add-page:horizontal { background: %1; }"
            "QScrollBar::add-line:horizontal {"
            "    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
            "    stop: 0  rgb(32, 47, 130), stop: 0.5 rgb(32, 47, 130),  stop:1 rgb(32, 47, 130));"
-           "    height: px;"
+           "    width: 0px;"
            "    subcontrol-position: bottom;"
            "    subcontrol-origin: margin;"
            "}"
            "QScrollBar::sub-line:horizontal {"
            "    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
            "    stop: 0  rgb(32, 47, 130), stop: 0.5 rgb(32, 47, 130),  stop:1 rgb(32, 47, 130));"
-           "    height: 0px;"
+           "    width: 0px;"
            "    subcontrol-position: top;"
            "    subcontrol-origin: margin;"
            "}"
@@ -296,6 +303,11 @@ TabView::dragEvent(bool x)
 void
 TabView::setShowBottom(bool x) 
 {
+    if (x == isShowBottom())
+    {
+        return;
+    }
+
     // remember last height used when hidind
     if (!x && bottom_) lastHeight = bottom_->height();
 
@@ -441,4 +453,35 @@ void
 TabView::checkBlank()
 {
     selectionChanged(); // run through the code again
+}
+
+void
+TabView::setBottomRequested(bool x)
+{
+    bottomRequested = x;
+    setShowBottom(x);
+}
+
+void
+TabView::setHideBottomOnIdle(bool x)
+{
+    bottomHideOnIdle = x;
+}
+
+void
+TabView::onIdle()
+{
+    if (bottomHideOnIdle)
+    {
+        setShowBottom(false);
+    }
+}
+
+void
+TabView::onActive()
+{
+    if (bottomRequested)
+    {
+        setShowBottom(true);
+    }
 }

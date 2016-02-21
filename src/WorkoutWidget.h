@@ -35,6 +35,7 @@
 #include <QPoint>
 #include <QVector>
 #include <QPainterPath>
+#include <QPropertyAnimation>
 #include <QTimer>
 
 #include "../qtsolutions/codeeditor/codeeditor.h"
@@ -110,12 +111,21 @@ class WorkoutWidget : public QWidget
 {
     Q_OBJECT
 
+    // we use this property purely to perform animations when zooming
+    Q_PROPERTY(QPointF vwidth READ getVWidth WRITE setVWidth USER false)
+
     public:
 
         WorkoutWidget(WorkoutWindow *parent, Context *context);
 
         // qwkode string
         QString qwkcode();
+
+        // do we need to save?
+        bool isDirty() { return stack.count() > 0; }
+
+        // update f with current edited content
+        void updateErgFile(ErgFile *f);
 
         // when recording we collect telemetry and plot it
         bool recording() { return recording_; }
@@ -149,12 +159,37 @@ class WorkoutWidget : public QWidget
         // get WPrime values
         WPrime &wprime() { return wpBal; }
 
-        // range for scales in plot units not draw units
-        double maxX(); // e.g. max watts
-        void setMaxX(double x) { maxX_ = x; }
-        double maxY(); // e.g. max seconds
-        double minX() { return 0.0f; } // might change later
+        // Workout Range (0-max only)
+        double maxWX() { return maxWX_; }
+        void setMaxWX(double x) { maxWX_ = x; }
+        double minWX() { return 0.0f; } // might change later
+
+        // View Range (can be offset from zero)
+        double maxVX() { return maxVX_; }
+        double minVX() { return minVX_; }
+
+        void setMaxVX(double x) { maxVX_ = x; }
+        void setMinVX(double x) { minVX_ = x; }
+
+        // we don't zoom/scroll the Y axis
+        double maxY() { return maxY_; }
         double minY() { return 0.0f; } // might change later
+
+        // zoom in / zoom out / zoom to fit
+        QPointF zoomIn();
+        QPointF zoomOut();
+        void zoomFit();
+
+        // will try and place in the centre if possible
+        void ensureVisible(double x);
+
+        // setting/getting view via properties when animating zoom
+        QPointF getVWidth() const { return QPointF(minVX_, maxVX_); }
+        void setVWidth(QPointF f) { 
+            minVX_=f.x(); maxVX_=f.y(); 
+            setBlockCursor();
+            repaint();
+        }
 
         // transform from plot to painter co-ordinate
         QPoint transform(double x, double y, RideFile::SeriesType s=RideFile::watts);
@@ -217,6 +252,7 @@ class WorkoutWidget : public QWidget
         // recording / editing
         void start();
         void stop();
+        void setNow(long);
         void telemetryUpdate(RealtimeData rtData);
 
         // and erg file was selected
@@ -254,6 +290,9 @@ class WorkoutWidget : public QWidget
         void copy();
         void paste();
 
+        // hate this function !
+        bool setBlockCursor();
+
     protected:
 
         // interacting with points
@@ -274,7 +313,6 @@ class WorkoutWidget : public QWidget
         // working with blocks
         bool createBlock(QPoint p);
         bool moveBlock(QPoint p);
-        bool setBlockCursor();
 
         // working with laps
         bool setLapState(); // as mouse moves
@@ -307,7 +345,14 @@ class WorkoutWidget : public QWidget
         // the lap definitions
         QList<ErgFileLap>   laps_;      // interval markers in the file
 
-        double maxX_, maxY_;
+        // Workout starts at 0 ends at maxWX_
+        double maxWX_;
+
+        // View starts at minVX_ ends at maxVX_
+        double minVX_, maxVX_;
+
+        // Y-axis always 0-maxY_ - no zoom or scroll
+        double maxY_;
 
         // command stack
         QList<WorkoutWidgetCommand *> stack;

@@ -38,8 +38,8 @@ static bool insensitiveLessThan(const QString &a, const QString &b)
 // although we edit global user metrics we do so in the current
 // context, using the current ride as a basis for the computation
 // and refreshing it when the current ride changes etc.
-EditUserMetricDialog::EditUserMetricDialog(Context *context, UserMetricSettings &here)
-    : QDialog(context->mainWindow, Qt::Dialog), context(context), settings(here)
+EditUserMetricDialog::EditUserMetricDialog(QWidget *parent, Context *context, UserMetricSettings &here)
+    : QDialog(parent, Qt::Dialog), context(context), settings(here)
 {
     setWindowTitle(tr("User Defined Metric"));
     setMinimumHeight(680);
@@ -123,6 +123,7 @@ EditUserMetricDialog::EditUserMetricDialog(Context *context, UserMetricSettings 
     // add special functions (older code needs fixing !)
     list << "config(cranklength)";
     list << "config(cp)";
+    list << "config(ftp)";
     list << "config(w')";
     list << "config(pmax)";
     list << "config(cv)";

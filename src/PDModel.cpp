@@ -166,6 +166,9 @@ PDModel::deriveCPParameters(int model)
     int iteration = 0;
     do {
 
+        // clear cherries
+        map.clear();
+
         // bounds check, don't go on for ever
         if (iteration++ > max_loops) break;
 
@@ -176,11 +179,19 @@ PDModel::deriveCPParameters(int model)
         // estimate cp, given tau
         int i;
         cp = 0;
+        bool changed=false;
+        int index=0;
+        double value=0;
         for (i = i3; i < i4; i++) {
             double cpn = data[i] / (1 + tau / (t0 + i / 60.0));
-            if (cp < cpn)
+            if (cp < cpn) {
                 cp = cpn;
+                index=i; value=data[i];
+                changed=true;
+            }
         }
+        if(changed) map.insert(index,value);
+
 
         // if cp = 0; no valid data; give up
         if (cp == 0.0)
@@ -188,15 +199,23 @@ PDModel::deriveCPParameters(int model)
 
         // estimate tau, given cp
         tau = tau_min;
+        changed=false;
         for (i = i1; i <= i2; i++) {
             double taun = (data[i] / cp - 1) * (i / 60.0 + t0) - t0;
-            if (tau < taun)
+            if (tau < taun) {
+                changed=true;
+                index=i;
+                value=data[i];
                 tau = taun;
+            }
         }
+        if (changed) map.insert(index,value);
 
         // estimate t0 - but only for veloclinic/3parm cp
         // where model is non-zero (CP2 is nonzero)
         if (model) t0 = tau / (data[1] / cp - 1) - 1 / 60.0;
+
+        //qDebug()<<"CONVERGING:"<<iteration<<"t0="<<t0<<"tau="<<tau<<"cp="<<cp;
 
     } while ((fabs(tau - tau_prev) > tau_delta_max) || (fabs(t0 - t0_prev) > t0_delta_max));
 }
@@ -208,10 +227,10 @@ PDModel::deriveCPParameters(int model)
 CP2Model::CP2Model(Context *context) :
     PDModel(context)
 {
-    // set default intervals to search CP 2-20
-    anI1=100;
-    anI2=120;
-    aeI1=1000;
+    // set default intervals to search CP 2-3 mins and 7-20 mins
+    anI1=120;
+    anI2=200;
+    aeI1=420;
     aeI2=1200;
 
     connect (this, SIGNAL(dataChanged()), this, SLOT(onDataChanged()));
@@ -618,11 +637,21 @@ double
 ExtendedModel::y(double t) const
 {
     // don't start at zero !
-    if (t == 0)
-        qDebug() << "ExtendedModel t=0 !!";
+    if (t == 0) qDebug() << "ExtendedModel t=0 !!";
 
     if (!minutes) t /= 60.00f;
-    return paa*(1.20-0.20*exp(-1*double(t)))*exp(paa_dec*(double(t))) + ecp * (1-exp(tau_del*double(t))) * (1-exp(ecp_del*double(t))) * (1+ecp_dec*exp(ecp_dec_del/double(t))) * ( 1 + etau/(double(t)));
+
+    // ATP/PCr in muscles
+    double immediate = paa*(1.20-0.20*exp(-1*t))*exp(paa_dec*(t));
+
+    // anaerobic glycolysis
+    double nonoxidative  = ecp * (1-exp(tau_del*t)) * (1-exp(ecp_del*t)) * (1+ecp_dec*exp(ecp_dec_del/t)) * (etau/(t));
+
+    // aerobic glycolysis and lipolysis
+    double oxidative  = ecp * (1-exp(tau_del*t)) * (1-exp(ecp_del*t)) * (1+ecp_dec*exp(ecp_dec_del/t)) * (1);
+
+    // sum of all for time t
+    return immediate + nonoxidative + oxidative;
 }
 
 // 2 parameter model can calculate these
@@ -787,7 +816,9 @@ ExtendedModel::deriveExtCPParameters()
         ecp_del_prev = ecp_del;
         ecp_dec_prev = ecp_dec;
 
-        // estimate cp, given tau
+        // 
+        // Solve for CP [asymptote]
+        //
         int i;
         ecp = 0;
         bool changed=false;
@@ -813,7 +844,9 @@ ExtendedModel::deriveExtCPParameters()
         if (ecp == 0.0)
             return;
 
-        // estimate etau, given ecp
+        //
+        // SOLVE FOR TAU [curvature constant]
+        //
         etau = etau_min;
         changed=false;
         val = 0;
@@ -832,7 +865,10 @@ ExtendedModel::deriveExtCPParameters()
             //qDebug()<<iteration<<"eCP Resolving: tau="<<etau<<"CP="<<ecp<<"p[i]"<<val;
         }
 
-        // estimate paa_dec
+
+        //
+        // SOLVE FOR PAA_DEC [decay rate for ATP-PCr energy system]
+        //
         paa_dec = paa_dec_min;
         changed=false;
         val=0;
@@ -851,6 +887,9 @@ ExtendedModel::deriveExtCPParameters()
             map.insert(index,val);
         }
 
+        //
+        // SOLVE FOR PAA [max power]
+        //
         paa = paa_min;
         double _avg_paa = 0.0;
         int count=1;
@@ -878,6 +917,9 @@ ExtendedModel::deriveExtCPParameters()
         }
 
 
+        //
+        // SOLVE FOR ECP_DEC [Fatigue rate; CHO, Motivation, Hydration etc]
+        //
         ecp_dec = ecp_dec_min;
         changed=false;
         val=0;

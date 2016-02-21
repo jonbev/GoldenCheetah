@@ -634,6 +634,7 @@ HEADERS  += \
         HrPwPlot.h \
         HrPwWindow.h \
         HrZones.h \
+        IdleTimer.h \
         IndendPlotMarker.h \
         IntervalItem.h \
         IntervalSummaryWindow.h \
@@ -758,6 +759,7 @@ HEADERS  += \
         TPUploadDialog.h \
         TPUpload.h \
         TrainDB.h \
+        TrainBottom.h \
         TrainingstagebuchUploader.h \
         TrainSidebar.h \
         TreeMapPlot.h \
@@ -767,6 +769,7 @@ HEADERS  += \
         UserData.h \
         UserMetricParser.h \
         UserMetricSettings.h \
+        Utils.h \
         VDOTCalculator.h \
         VeloHeroUploader.h \
         VideoLayoutParser.h \
@@ -899,6 +902,7 @@ SOURCES += \
         HrPwWindow.cpp \
         HrTimeInZone.cpp \
         HrZones.cpp \
+        IdleTimer.cpp \
         IndendPlotMarker.cpp \
         IntervalItem.cpp \
         IntervalSummaryWindow.cpp \
@@ -1024,6 +1028,7 @@ SOURCES += \
         TPDownloadDialog.cpp \
         TPUpload.cpp \
         TPUploadDialog.cpp \
+        TrainBottom.cpp \
         TrainDB.cpp \
         TrainingstagebuchUploader.cpp \
         TrainSidebar.cpp \
@@ -1035,6 +1040,7 @@ SOURCES += \
         UserData.cpp \
         UserMetric.cpp \
         UserMetricParser.cpp \
+        Utils.cpp \
         VDOTCalculator.cpp \
         VDOT.cpp \
         VeloHeroUploader.cpp \

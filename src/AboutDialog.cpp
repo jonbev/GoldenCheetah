@@ -131,6 +131,7 @@ ContributorsPage::ContributorsPage(Context *context) : context(context)
     contributors.append("Claus Assmann");
     contributors.append("Dag Gruneau");
     contributors.append("Damien Grauser");
+    contributors.append("Daniel Besse");
     contributors.append("Darren Hague");
     contributors.append("Dave Waterworth");
     contributors.append("Dean Junk");
@@ -143,6 +144,7 @@ ContributorsPage::ContributorsPage(Context *context) : context(context)
     contributors.append("Greg Lonnon");
     contributors.append("Ilja Booij");
     contributors.append("Irvin Sirotić");
+    contributors.append("Ivor Hewitt");
     contributors.append("Jaime Jofre");
     contributors.append("Jamie Kimberley");
     contributors.append("Jan de Visser");

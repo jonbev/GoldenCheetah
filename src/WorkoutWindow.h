@@ -27,10 +27,15 @@
 #include <QPlainTextEdit>
 #include <QCheckBox>
 #include <QLabel>
-
+#include <QFileDialog>
+#include <QScrollBar>
+#include <QMessageBox>
+#include <QPointF>
 
 #include "Context.h"
 #include "RideFile.h" // for data series types
+#include "Library.h"  // workout library
+#include "TabView.h"  // stylesheet for scroller
 
 #include "Settings.h"
 #include "Units.h"
@@ -61,6 +66,9 @@ class WorkoutWindow : public GcWindow
 
         WorkoutWindow(Context *context);
 
+        // the ergfile we are editing
+        ErgFile *ergFile;
+
         // edit the definition
         CodeEditor *code;
 
@@ -68,20 +76,38 @@ class WorkoutWindow : public GcWindow
         QLabel *xlabel, *ylabel;
         QLabel *TSSlabel, *IFlabel;
 
-        QAction *saveAct, *propertiesAct,
+        QAction *newAct, *saveAsAct,
+                *saveAct, *propertiesAct,
                 *undoAct, *redoAct,
                 *drawAct, *selectAct,
-                *cutAct, *copyAct, *pasteAct;
+                *cutAct, *copyAct, *pasteAct,
+                *zoomInAct, *zoomOutAct;
 
         bool draw; // draw or select mode?
 
    public slots:
 
         // toolbar functions
+        void newFile();
         void saveFile();
+        void saveAs();
         void properties();
         void drawMode();
         void selectMode();
+
+        // zooming and scrolling
+        void zoomIn();
+        void zoomOut();
+
+        // set scrollbar min/max/page
+        // via min/max view encoded in QPointF
+        void setScroller(QPointF);
+
+        // user moved scrollbar
+        void scrollMoved();
+
+        // and erg file was selected
+        void ergFileSelected(ErgFile *);
 
         // qwkcode edited!
         void qwkcodeChanged();
@@ -105,6 +131,7 @@ class WorkoutWindow : public GcWindow
 
         QToolBar *toolbar;
         WorkoutWidget *workout; // will become editor.
+        QScrollBar *scroll;     // for controlling the position
 
         WWPowerScale *powerscale;
         WWWBalScale *wbalscale;

@@ -90,7 +90,7 @@ SearchBox::SearchBox(Context *context, QWidget *parent, bool nochooser)
 
 static bool insensitiveLessThan(const QString &a, const QString &b)
 {
-    return a.toLower() < b.toLower();
+    return (QString::compare(a,b,Qt::CaseInsensitive)<0);
 }
 
 void
@@ -154,6 +154,7 @@ SearchBox::configChanged(qint32)
     // add special functions (older code needs fixing !)
     list << "config(cranklength)";
     list << "config(cp)";
+    list << "config(ftp)";
     list << "config(w')";
     list << "config(pmax)";
     list << "config(cv)";
