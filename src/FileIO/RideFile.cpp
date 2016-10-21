@@ -112,6 +112,14 @@ RideFile::~RideFile()
         //delete interval;
     delete command;
     if (wprime_) delete wprime_;
+
+    // delete any Xdata
+    QMapIterator<QString,XDataSeries*> it(xdata_);
+    while(it.hasNext()) {
+        it.next();
+        XDataSeries *p = it.value();
+        delete p;
+    }
     //!!! if (data) delete data; // need a mechanism to notify the editor
 }
 
@@ -133,6 +141,48 @@ RideFile::computeFileCRC(QString filename)
     file.close();
 
     return qChecksum(&data[0], file.size());
+}
+
+void
+RideFile::updateDataTag()
+{
+    QString flags;
+
+    if (areDataPresent()->secs) flags += 'T'; // time
+    else flags += '-';
+    if (areDataPresent()->km) flags += 'D'; // distance
+    else flags += '-';
+    if (areDataPresent()->kph) flags += 'S'; // speed
+    else flags += '-';
+    if (areDataPresent()->watts) flags += 'P'; // Power
+    else flags += '-';
+    if (areDataPresent()->hr) flags += 'H'; // Heartrate
+    else flags += '-';
+    if (areDataPresent()->cad) flags += 'C'; // cadence
+    else flags += '-';
+    if (areDataPresent()->nm) flags += 'N'; // Torque
+    else flags += '-';
+    if (areDataPresent()->alt) flags += 'A'; // Altitude
+    else flags += '-';
+    if (areDataPresent()->lat ||
+        areDataPresent()->lon ) flags += 'G'; // GPS
+    else flags += '-';
+    if (areDataPresent()->slope) flags += 'L'; // Slope
+    else flags += '-';
+    if (areDataPresent()->headwind) flags += 'W'; // Windspeed
+    else flags += '-';
+    if (areDataPresent()->temp) flags += 'E'; // Temperature
+    else flags += '-';
+    if (areDataPresent()->lrbalance) flags += 'V'; // V for "Vector" aka lr pedal data
+    else flags += '-';
+    if (areDataPresent()->smo2 ||
+        areDataPresent()->thb) flags += 'O'; // Moxy O2/Haemoglobin
+    else flags += '-';
+    if (areDataPresent()->rcontact ||
+        areDataPresent()->rvert ||
+        areDataPresent()->rcontact) flags += 'R'; // R is for running dynamics
+    else flags += '-';
+    setTag("Data", flags);
 }
 
 WPrime *
@@ -162,65 +212,66 @@ RideFile::isSwim() const
     return (getTag("Sport", "") == "Swim" || getTag("Sport", "") == tr("Swim"));
 }
 
-// compatibility means used in e.g. R so no spaces in names
+// compatibility means used in e.g. R so no spaces in names,
+// NOT allowed to be translated,
 // and use naming convention e.g. trackeR R package
 QString
 RideFile::seriesName(SeriesType series, bool compat)
 {
     if (compat) {
         switch (series) {
-        case RideFile::secs: return QString(tr("seconds"));
-        case RideFile::cad: return QString(tr("cadence"));
-        case RideFile::hr: return QString(tr("heart.rate"));
-        case RideFile::km: return QString(tr("distance"));
-        case RideFile::kph: return QString(tr("speed"));
-        case RideFile::kphd: return QString(tr("acceleration"));
-        case RideFile::wattsd: return QString(tr("powerd"));
-        case RideFile::cadd: return QString(tr("cadenced"));
-        case RideFile::nmd: return QString(tr("torqued"));
-        case RideFile::hrd: return QString(tr("heart.rated"));
-        case RideFile::nm: return QString(tr("torque"));
-        case RideFile::watts: return QString(tr("power"));
-        case RideFile::xPower: return QString(tr("xpower"));
-        case RideFile::aPower: return QString(tr("apower"));
-        case RideFile::aTISS: return QString(tr("atiss"));
-        case RideFile::anTISS: return QString(tr("antiss"));
-        case RideFile::NP: return QString(tr("NP"));
-        case RideFile::alt: return QString(tr("altitude"));
-        case RideFile::lon: return QString(tr("longitude"));
-        case RideFile::lat: return QString(tr("latitude"));
-        case RideFile::headwind: return QString(tr("headwind"));
-        case RideFile::slope: return QString(tr("slope"));
-        case RideFile::temp: return QString(tr("temperature"));
-        case RideFile::lrbalance: return QString(tr("lrbalance"));
-        case RideFile::lte: return QString(tr("lte"));
-        case RideFile::rte: return QString(tr("rte"));
-        case RideFile::lps: return QString(tr("lps"));
-        case RideFile::rps: return QString(tr("rps"));
-        case RideFile::lpco: return QString(tr("lpco"));
-        case RideFile::rpco: return QString(tr("rpco"));
-        case RideFile::lppb: return QString(tr("lppb"));
-        case RideFile::rppb: return QString(tr("rppb"));
-        case RideFile::lppe: return QString(tr("lppe"));
-        case RideFile::rppe: return QString(tr("rppe"));
-        case RideFile::lpppb: return QString(tr("lpppb"));
-        case RideFile::rpppb: return QString(tr("rpppb"));
-        case RideFile::lpppe: return QString(tr("lpppe"));
-        case RideFile::rpppe: return QString(tr("rpppe"));
-        case RideFile::interval: return QString(tr("interval"));
-        case RideFile::vam: return QString(tr("vam"));
-        case RideFile::wattsKg: return QString(tr("wpk"));
+        case RideFile::secs: return QString("seconds");
+        case RideFile::cad: return QString("cadence");
+        case RideFile::hr: return QString("heart.rate");
+        case RideFile::km: return QString("distance");
+        case RideFile::kph: return QString("speed");
+        case RideFile::kphd: return QString("acceleration");
+        case RideFile::wattsd: return QString("powerd");
+        case RideFile::cadd: return QString("cadenced");
+        case RideFile::nmd: return QString("torqued");
+        case RideFile::hrd: return QString("heart.rated");
+        case RideFile::nm: return QString("torque");
+        case RideFile::watts: return QString("power");
+        case RideFile::xPower: return QString("xpower");
+        case RideFile::aPower: return QString("apower");
+        case RideFile::aTISS: return QString("atiss");
+        case RideFile::anTISS: return QString("antiss");
+        case RideFile::NP: return QString("NP");
+        case RideFile::alt: return QString("altitude");
+        case RideFile::lon: return QString("longitude");
+        case RideFile::lat: return QString("latitude");
+        case RideFile::headwind: return QString("headwind");
+        case RideFile::slope: return QString("slope");
+        case RideFile::temp: return QString("temperature");
+        case RideFile::lrbalance: return QString("lrbalance");
+        case RideFile::lte: return QString("lte");
+        case RideFile::rte: return QString("rte");
+        case RideFile::lps: return QString("lps");
+        case RideFile::rps: return QString("rps");
+        case RideFile::lpco: return QString("lpco");
+        case RideFile::rpco: return QString("rpco");
+        case RideFile::lppb: return QString("lppb");
+        case RideFile::rppb: return QString("rppb");
+        case RideFile::lppe: return QString("lppe");
+        case RideFile::rppe: return QString("rppe");
+        case RideFile::lpppb: return QString("lpppb");
+        case RideFile::rpppb: return QString("rpppb");
+        case RideFile::lpppe: return QString("lpppe");
+        case RideFile::rpppe: return QString("rpppe");
+        case RideFile::interval: return QString("interval");
+        case RideFile::vam: return QString("vam");
+        case RideFile::wattsKg: return QString("wpk");
         case RideFile::wbal:
-        case RideFile::wprime: return QString(tr("wbal"));
-        case RideFile::smo2: return QString(tr("smo2"));
-        case RideFile::thb: return QString(tr("thb"));
-        case RideFile::o2hb: return QString(tr("o2hb"));
-        case RideFile::hhb: return QString(tr("hhb"));
-        case RideFile::rvert: return QString(tr("rvert"));
-        case RideFile::rcad: return QString(tr("rcad"));
-        case RideFile::rcontact: return QString(tr("gct"));
-        case RideFile::gear: return QString(tr("gearratio"));
-        default: return QString(tr("unknown"));
+        case RideFile::wprime: return QString("wbal");
+        case RideFile::smo2: return QString("smo2");
+        case RideFile::thb: return QString("thb");
+        case RideFile::o2hb: return QString("o2hb");
+        case RideFile::hhb: return QString("hhb");
+        case RideFile::rvert: return QString("rvert");
+        case RideFile::rcad: return QString("rcad");
+        case RideFile::rcontact: return QString("gct");
+        case RideFile::gear: return QString("gearratio");
+        default: return QString("unknown");
         }
     } else {
         switch (series) {
@@ -396,6 +447,17 @@ RideFile::unitName(SeriesType series, Context *context)
     case RideFile::gear: return QString(tr("ratio"));
     default: return QString(tr("Unknown"));
     }
+}
+
+QString
+RideFile::formatValueWithUnit(double value, SeriesType series, Conversion conversion, Context *context, bool isSwim)
+{
+    bool useMetricUnits = context->athlete->useMetricUnits;
+
+    if (series == RideFile::kph && conversion == RideFile::pace)
+        return kphToPace(value, useMetricUnits, isSwim);
+    else
+        return QString("%1%2").arg(value).arg(unitName(series, context));
 }
 
 void
@@ -710,49 +772,70 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
         if (context) result->recalculateDerivedSeries();
 
         // what data is present - after processor in case 'derived' or adjusted
-        QString flags;
-
-        if (result->areDataPresent()->secs) flags += 'T'; // time
-        else flags += '-';
-        if (result->areDataPresent()->km) flags += 'D'; // distance
-        else flags += '-';
-        if (result->areDataPresent()->kph) flags += 'S'; // speed
-        else flags += '-';
-        if (result->areDataPresent()->watts) flags += 'P'; // Power
-        else flags += '-';
-        if (result->areDataPresent()->hr) flags += 'H'; // Heartrate
-        else flags += '-';
-        if (result->areDataPresent()->cad) flags += 'C'; // cadence
-        else flags += '-';
-        if (result->areDataPresent()->nm) flags += 'N'; // Torque
-        else flags += '-';
-        if (result->areDataPresent()->alt) flags += 'A'; // Altitude
-        else flags += '-';
-        if (result->areDataPresent()->lat ||
-            result->areDataPresent()->lon ) flags += 'G'; // GPS
-        else flags += '-';
-        if (result->areDataPresent()->slope) flags += 'L'; // Slope
-        else flags += '-';
-        if (result->areDataPresent()->headwind) flags += 'W'; // Windspeed
-        else flags += '-';
-        if (result->areDataPresent()->temp) flags += 'E'; // Temperature
-        else flags += '-';
-        if (result->areDataPresent()->lrbalance) flags += 'V'; // V for "Vector" aka lr pedal data
-        else flags += '-';
-        if (result->areDataPresent()->smo2 ||
-            result->areDataPresent()->thb) flags += 'O'; // Moxy O2/Haemoglobin
-        else flags += '-';
-        if (result->areDataPresent()->rcontact ||
-            result->areDataPresent()->rvert ||
-            result->areDataPresent()->rcontact) flags += 'R'; // R is for running dynamics
-        else flags += '-';
-        result->setTag("Data", flags);
+        result->updateDataTag();
 
         //foreach(RideFile::seriestype x, result->arePresent()) qDebug()<<"present="<<x;
 
+        // sample code for using XDATA, left here temporarily till we have an
+        // example of using it in a ride file reader
+#if 0
+
+        // ADD XDATA TO RIDEFILE
+
+        // For testing xdata, this code just adds an xdata series
+        // XDataSeries *xdata = new XDataSeries();
+        // xdata->name = "SPEED";
+        // xdata->valuename << "SPEED";
+        // for(int i=0; i<100; i++) {
+        // XDataPoint *p = new XDataPoint();
+        // p->km = i;
+        // p->secs = i;
+        // p->number[0] = i;
+        // xdata->datapoints.append(p);
+        // }
+        // result->addXData("SPEED", xdata);
+
+        // DEBUG OUTPUT TO SHOW XDATA LOADED FROM RIDEFILE
+        // for testing, print out what we loaded
+        if (result->xdata_.count()) {
+
+            // output the xdata series
+            qDebug()<<"XDATA";
+
+            QMapIterator<QString,XDataSeries*> xdata(result->xdata());
+            xdata.toFront();
+            while(xdata.hasNext()) {
+
+                // iterate
+                xdata.next();
+
+                XDataSeries *series = xdata.value();
+
+                // does it have values names?
+                if (series->valuename.isEmpty()) {
+                    qDebug()<<"empty xdata"<<series->name;
+                    continue;
+                } else {
+                    qDebug()<<"xdata" <<series->name<<series->valuename<<series->datapoints.count();
+                }
+
+                // samples
+                if (series->datapoints.count()) {
+                    foreach(XDataPoint *p, series->datapoints)
+                        qDebug()<<"sample:"<<p->secs<<p->km<<p->number[0]<<p->number[1];
+                }
+            }
+        }
+#endif
     }
 
     return result;
+}
+
+void
+RideFile::addXData(QString name, XDataSeries *series)
+{
+    xdata_.insert(name, series);
 }
 
 QStringList RideFileFactory::listRideFiles(const QDir &dir) const
@@ -1205,6 +1288,7 @@ RideFile::setDataPresent(SeriesType series, bool value)
         default:
         case none : break;
     }
+    updateDataTag();
 }
 
 bool

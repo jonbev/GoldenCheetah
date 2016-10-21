@@ -27,19 +27,23 @@
 #include "Settings.h"
 #include <stdexcept>
 
+#include <QMessageBox>
+
 static const char *name = "GoldenCheetah";
 
 // no setenv on windows
 #if WIN32
-int setenv(const char *name, const char *value, int overwrite)
+int setenv(QString name, QString value, bool overwrite)
 {
     int errcode = 0;
     if(!overwrite) {
         size_t envsize = 0;
-        errcode = getenv_s(&envsize, NULL, 0, name);
+        errcode = getenv_s(&envsize, NULL, 0, name.toLatin1().constData());
         if(errcode || envsize) return errcode;
     }
-    return _putenv_s(name, value);
+
+    // make the update
+    return _putenv_s(name.toLatin1().constData(), value.toLatin1().constData());
 }
 #endif
 
@@ -67,6 +71,16 @@ REmbed::REmbed(const bool verbose, const bool interactive) : verbose(verbose), i
 {
     loaded = false;
 
+    // need to load the library
+    RLibrary rlib;
+    if (!rlib.load()) {
+        QMessageBox msg(QMessageBox::Critical,
+                    "Failed to load R library",
+                    rlib.errors.join("\n"));
+        msg.exec();
+        return;
+    }
+
     // we need to tell embedded R where to work
     QString envR_HOME(getenv("R_HOME"));
     QString configR_HOME = appsettings->value(NULL,GC_R_HOME,"").toString();
@@ -75,10 +89,9 @@ REmbed::REmbed(const bool verbose, const bool interactive) : verbose(verbose), i
             qDebug()<<"R HOME not set, R disabled";
             return;
         } else {
-            setenv("R_HOME", configR_HOME.toLatin1().constData(), 1);
+            setenv("R_HOME", configR_HOME.toLatin1().constData(), true);
         }
     }
-
     // fire up R
     const char *R_argv[] = {name, "--gui=none", "--no-save",
                             "--no-readline", "--silent", "--vanilla", "--slave"};
@@ -95,7 +108,7 @@ REmbed::REmbed(const bool verbose, const bool interactive) : verbose(verbose), i
     Rst.ReadConsole = &RTool::R_ReadConsoleWin;
     Rst.WriteConsole = &RTool::R_WriteConsole;
     Rst.WriteConsoleEx = &RTool::R_WriteConsoleEx;
-    Rst.CallBack = &RTool::R_Callback;
+    Rst.CallBack = &RTool::R_ProcessEvents;
     Rst.ShowMessage = &RTool::R_ShowMessage;
     Rst.YesNoCancel = &RTool::R_YesNoCancel;
     Rst.Busy = &RTool::R_Busy;
@@ -145,7 +158,7 @@ int REmbed::parseEval(QString line, SEXP & ans) {
         return 1;
         break;
     case PARSE_ERROR:
-        if (verbose) Rf_warning("Parse Error: \"%s\"\n", line.toStdString().c_str());
+        if (verbose) Rf_error("Parse Error: \"%s\"\n", line.toStdString().c_str());
         UNPROTECT(2);
         program.clear();
         return 1;

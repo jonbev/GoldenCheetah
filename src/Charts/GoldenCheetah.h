@@ -223,7 +223,7 @@ private:
     Q_OBJECT
 
     QStackedLayout *_layout;
-    QGridLayout *_mainLayout;
+    QStackedLayout *_mainLayout;
     QVBoxLayout *_defaultBlankLayout;
 
     QLayout *_chartLayout,
@@ -241,6 +241,8 @@ private:
     QTimer *_unrevealTimer;
     Context *context;
 
+public:
+
     // reveal
     bool virtual hasReveal() { return false; }
     void reveal();
@@ -250,8 +252,16 @@ private:
     GcOverlayWidget *overlayWidget;
     bool wantOverlay;
 
-public:
+    // handle Chart Serialissation
+    void serializeChartToQTextStream(QTextStream& out);
+
+
     GcChartWindow(Context *context);
+
+    // parse a .gchart file / or string and return a list of charts expressed
+    // as a property list in a QMap1
+    static QList<QMap<QString,QString> > chartPropertiesFromFile(QString filename);
+    static QList<QMap<QString,QString> > chartPropertiesFromString(QString contents);
 
     QWidget *mainWidget() { return _mainWidget; }
     GcOverlayWidget *helperWidget() { return overlayWidget; }
@@ -266,6 +276,10 @@ public:
 public slots:
     void hideRevealControls();
     void saveImage();
+    void saveChart();
+#ifdef GC_HAS_CLOUD_DB
+    void exportChartToCloudDB();
+#endif
     void colorChanged(QColor);
 };
 

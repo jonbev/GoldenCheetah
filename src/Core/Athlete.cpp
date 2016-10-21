@@ -67,8 +67,12 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
 
     // Recovering from a crash?
     if(!appsettings->cvalue(cyclist, GC_SAFEEXIT, true).toBool()) {
-        GcCrashDialog *crashed = new GcCrashDialog(homeDir);
-        crashed->exec();
+
+        // From V4 we have started to disable this dialog since
+        // the information captured is not longer that valuable
+        // and the instances of crashes are much, much lower
+        // XXXGcCrashDialog *crashed = new GcCrashDialog(homeDir);
+        // XXXcrashed->exec();
     }
     appsettings->setCValue(cyclist, GC_SAFEEXIT, false); // will be set to true on exit
 
@@ -103,17 +107,31 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
                 QMessageBox::warning(context->mainWindow, tr("Reading Zones File %1").arg(zones_[i]->fileName()), zones_[i]->warningString());
             }
         }
+        if (i == 1 && zones_[i]->getRangeSize() == 0) { // No running Power zones
+            // Start with Cycling Power zones for backward compatibilty
+            QFile zonesFile(home->config().canonicalPath() + "/" + zones_[0]->fileName());
+            // Load without error/warning report to avoid repetition
+            if (zonesFile.exists()) zones_[i]->read(zonesFile);
+        }
     }
 
-    // Heartrate Zones
-    hrzones_ = new HrZones;
-    QFile hrzonesFile(home->config().canonicalPath() + "/hr.zones");
-    if (hrzonesFile.exists()) {
-        if (!hrzones_->read(hrzonesFile)) {
-            QMessageBox::critical(context->mainWindow, tr("HR Zones File Error"),
-				  hrzones_->errorString());
-        } else if (! hrzones_->warningString().isEmpty())
-            QMessageBox::warning(context->mainWindow, tr("Reading HR Zones File"), hrzones_->warningString());
+    // Heartrate Zones for Bike & Run
+    for (int i=0; i < 2; i++) {
+        hrzones_[i] = new HrZones(i>0);
+        QFile hrzonesFile(home->config().canonicalPath() + "/" + hrzones_[i]->fileName());
+        if (hrzonesFile.exists()) {
+            if (!hrzones_[i]->read(hrzonesFile)) {
+                QMessageBox::critical(context->mainWindow, tr("HR Zones File %1 Error").arg(hrzones_[i]->fileName()), hrzones_[i]->errorString());
+            } else if (! hrzones_[i]->warningString().isEmpty()) {
+                QMessageBox::warning(context->mainWindow, tr("Reading HR Zones File %1").arg(hrzones_[i]->fileName()), hrzones_[i]->warningString());
+            }
+        }
+        if (i == 1 && hrzones_[i]->getRangeSize() == 0) { // No running HR zones
+            // Start with Cycling HR zones for backward compatibilty
+            QFile hrzonesFile(home->config().canonicalPath() + "/" + hrzones_[0]->fileName());
+            // Load without error/warning report to avoid repetition
+            if (hrzonesFile.exists()) hrzones_[i]->read(hrzonesFile);
+        }
     }
 
     // Pace Zones for Run & Swim
@@ -235,7 +253,7 @@ Athlete::~Athlete()
     delete rideMetadata_;
     delete colorEngine;
     for (int i=0; i<2; i++) delete zones_[i];
-    delete hrzones_;
+    for (int i=0; i<2; i++) delete hrzones_[i];
     for (int i=0; i<2; i++) delete pacezones_[i];
     delete autoImportConfig;
     delete autoImport;

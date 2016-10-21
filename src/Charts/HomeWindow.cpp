@@ -30,6 +30,11 @@
 #include "ChartBar.h"
 #include "Utils.h"
 
+// When ESC pressed during R processing we cancel it
+#ifdef GC_WANT_R
+#include "RTool.h"
+#endif
+
 #include <QDesktopWidget>
 #include <QStyle>
 #include <QStyleFactory>
@@ -198,6 +203,81 @@ HomeWindow::addChartFromMenu(QAction*action)
 }
 
 void
+HomeWindow::importChart(QMap<QString,QString>properties, bool select)
+{
+    // turn off updates whilst we do this...
+    setUpdatesEnabled(false);
+
+    // what type?
+    GcWinID type = static_cast<GcWinID>(properties.value("TYPE","1").toInt());
+
+    GcChartWindow *chart = GcWindowRegistry::newGcWindow(type, context);
+
+    // bad chart file !
+    if (chart == NULL) {
+        setUpdatesEnabled(true);
+
+        QMessageBox msgBox;
+        msgBox.setIcon(QMessageBox::Critical);
+        msgBox.setText(tr("Unable to process chart file"));
+        msgBox.setInformativeText(QString(tr("Bad chart type (%1).")).arg(static_cast<int>(type)));
+        msgBox.exec();
+        return;
+    }
+
+    // hide it before doing anything!
+    chart->hide();
+
+    // metaobject describes properties
+    const QMetaObject *m = chart->metaObject();
+
+    // set all the properties
+    chart->setProperty("view", name);
+
+    // each of the user properties
+    QMapIterator<QString,QString> prop(properties);
+    prop.toFront();
+    while(prop.hasNext()) {
+        prop.next();
+        if (prop.key() == "VIEW" || prop.key()=="TYPE") continue;
+
+        // ok, we have a property
+        for (int i=0; i<m->propertyCount(); i++) {
+            QMetaProperty p = m->property(i);
+            if (p.name() == prop.key()) {
+
+                // ok we have a winner, how to format it?
+                if (QString(p.typeName()) == "int") chart->setProperty(prop.key().toLatin1(), prop.value().toInt());
+                if (QString(p.typeName()) == "double") chart->setProperty(prop.key().toLatin1(), prop.value().toDouble());
+                if (QString(p.typeName()) == "QDate") chart->setProperty(prop.key().toLatin1(), QDate::fromString(prop.value()));
+                if (QString(p.typeName()) == "QString") chart->setProperty(prop.key().toLatin1(), Utils::jsonunprotect(prop.value()));
+                if (QString(p.typeName()) == "bool") chart->setProperty(prop.key().toLatin1(), prop.value().toInt());
+                if (QString(p.typeName()) == "LTMSettings") {
+                    QByteArray base64(prop.value().toLatin1());
+                    QByteArray unmarshall = QByteArray::fromBase64(base64);
+                    QDataStream s(&unmarshall, QIODevice::ReadOnly);
+                    LTMSettings x;
+                    s >> x;
+                    chart->setProperty(prop.key().toLatin1(), QVariant().fromValue<LTMSettings>(x));
+                }
+            }
+        }
+    }
+
+    // now set managed properties etc
+    addChart(chart);
+
+    // set to whatever we have selected
+    RideItem *notconst = (RideItem*)context->currentRideItem();
+    chart->setProperty("ride", QVariant::fromValue<RideItem*>(notconst));
+    chart->setProperty("dateRange", property("dateRange"));
+
+    if (select && charts.count())  tabSelected(charts.count()-1);
+
+    setUpdatesEnabled(true);
+}
+
+void
 HomeWindow::configChanged(qint32)
 {
     // update scroll bar
@@ -303,13 +383,17 @@ HomeWindow::tabSelected(int index)
     active = true;
 
     if (index >= 0) {
+
+        // show
         charts[index]->show();
-        charts[index]->setProperty("ride", property("ride"));
-        charts[index]->setProperty("dateRange", property("dateRange"));
         controlStack->setCurrentIndex(index);
         titleEdit->setText(charts[index]->property("title").toString());
         tabbed->setCurrentIndex(index);
         chartbar->setCurrentIndex(index);
+
+        // set
+        charts[index]->setProperty("ride", property("ride"));
+        charts[index]->setProperty("dateRange", property("dateRange"));
     }
 
     active = false;
@@ -337,7 +421,7 @@ void
 HomeWindow::tabMoved(int to, int from)
 {
     // re-order the tabs
-    GcWindow *orig = charts[to];
+    GcChartWindow *orig = charts[to];
     charts[to] = charts[from];
     charts[from] = orig;
 
@@ -448,7 +532,7 @@ HomeWindow::dragEnterEvent(QDragEnterEvent *)
 void
 HomeWindow::appendChart(GcWinID id)
 {
-    GcWindow *newone = NULL;
+    GcChartWindow *newone = NULL;
 
     // GcWindowDialog is delete on close, so no need to delete
     GcWindowDialog *f = new GcWindowDialog(id, context, &newone);
@@ -508,7 +592,7 @@ HomeWindow::showControls()
 }
 
 void
-HomeWindow::addChart(GcWindow* newone)
+HomeWindow::addChart(GcChartWindow* newone)
 {
     int chartnum = charts.count();
 
@@ -517,7 +601,7 @@ HomeWindow::addChart(GcWindow* newone)
     if (newone) {
 
         // add the controls
-        QWidget *x = dynamic_cast<GcWindow*>(newone)->controls();
+        QWidget *x = dynamic_cast<GcChartWindow*>(newone)->controls();
         QWidget *c = (x != NULL) ? x : new QWidget(this);
 
         // link settings button to show controls
@@ -533,6 +617,7 @@ HomeWindow::addChart(GcWindow* newone)
         newone->installEventFilter(this);
 
         RideItem *notconst = (RideItem*)context->currentRideItem();
+        newone->setProperty("view", name);
         newone->setProperty("ride", QVariant::fromValue<RideItem*>(notconst));
         newone->setProperty("dateRange", property("dateRange"));
         newone->setProperty("style", currentStyle);
@@ -657,8 +742,8 @@ HomeWindow::removeChart(int num, bool confirm)
         default:
             break; // never reached
     }
-    ((GcWindow*)(charts[num]))->close(); // disconnect
-    ((GcWindow*)(charts[num]))->deleteLater();
+    ((GcChartWindow*)(charts[num]))->close(); // disconnect
+    ((GcChartWindow*)(charts[num]))->deleteLater();
     charts.removeAt(num);
 
     update();
@@ -687,7 +772,7 @@ HomeWindow::showEvent(QShowEvent *)
 void
 HomeWindow::resizeEvent(QResizeEvent * /* e */)
 {
-    foreach (GcWindow *x, charts) {
+    foreach (GcChartWindow *x, charts) {
 
         switch (currentStyle) {
 
@@ -737,13 +822,20 @@ HomeWindow::eventFilter(QObject *object, QEvent *e)
 {
     if (!isVisible()) return false; // ignore when we aren't visible
 
+#ifdef GC_WANT_R
+    if (e->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(e)->key()==Qt::Key_Escape) {
+        // if we're running a script stop it
+        if (rtool && rtool->canvas) rtool->cancel();
+    }
+#endif
+
     // mouse moved and tabbed -- should we show/hide chart popup controls?
     if (e->type() == QEvent::MouseMove && currentStyle == 0 && tabbed->currentIndex() >= 0) {
 
         if (tabbed->currentIndex() >= charts.count()) return false;
 
         QPoint pos = tabbed->widget(tabbed->currentIndex())->mapFromGlobal(QCursor::pos());
-        GcWindow *us = charts[tabbed->currentIndex()];
+        GcChartWindow *us = charts[tabbed->currentIndex()];
 
         // lots of nested if statements to breakout as quickly as possible
         // this code gets called A LOT, since mouse events are from the 
@@ -951,11 +1043,11 @@ HomeWindow::windowMoved(GcWindow*w)
                 if (chartCursor >= 0) {
                     controlStack->insertWidget(chartCursor, c);
                     winFlow->insert(chartCursor, m);
-                    charts.insert(chartCursor, dynamic_cast<GcWindow*>(l));
+                    charts.insert(chartCursor, dynamic_cast<GcChartWindow*>(l));
                 } else {
                     controlStack->addWidget(c);
                     winFlow->addWidget(m);
-                    charts.append(dynamic_cast<GcWindow*>(l));
+                    charts.append(dynamic_cast<GcChartWindow*>(l));
                 }
                 break;
             }
@@ -1033,7 +1125,7 @@ HomeWindow::drawCursor()
     }
 }
 
-GcWindowDialog::GcWindowDialog(GcWinID type, Context *context, GcWindow **here, bool sidebar, LTMSettings *use) : context(context), type(type), here(here), sidebar(sidebar)
+GcWindowDialog::GcWindowDialog(GcWinID type, Context *context, GcChartWindow **here, bool sidebar, LTMSettings *use) : context(context), type(type), here(here), sidebar(sidebar)
 {
     //setAttribute(Qt::WA_DeleteOnClose);
     setWindowFlags(windowFlags());
@@ -1158,7 +1250,7 @@ HomeWindow::saveState()
     out<<"<layout name=\""<< name <<"\" style=\"" << currentStyle <<"\">\n";
 
     // iterate over charts
-    foreach (GcWindow *chart, charts) {
+    foreach (GcChartWindow *chart, charts) {
         GcWinID type = chart->property("type").value<GcWinID>();
 
         out<<"\t<chart id=\""<<static_cast<int>(type)<<"\" "
@@ -1311,7 +1403,7 @@ HomeWindow::restoreState(bool useDefault)
 
         // layout the results
         styleChanged(handler.style);
-        foreach(GcWindow *chart, handler.charts) addChart(chart);
+        foreach(GcChartWindow *chart, handler.charts) addChart(chart);
     }
 
     // set to whatever we have selected
@@ -1415,10 +1507,11 @@ bool ViewParser::endDocument()
 
 void HomeWindow::closeWindow(GcWindow*thisone)
 {
-    if (charts.contains(thisone)) removeChart(charts.indexOf(thisone));
+    if (charts.contains(static_cast<GcChartWindow*>(thisone)))
+        removeChart(charts.indexOf(static_cast<GcChartWindow*>(thisone)));
 }
 
-void HomeWindow::translateChartTitles(QList<GcWindow*> charts)
+void HomeWindow::translateChartTitles(QList<GcChartWindow*> charts)
 {
     // Map default (english) title to external (Localized) name, new default
     // charts in *layout.xml need to be added to this list to be translated
@@ -1462,7 +1555,7 @@ void HomeWindow::translateChartTitles(QList<GcWindow*> charts)
     titleMap.insert("Library", tr("Library"));
     titleMap.insert("CV", tr("CV"));
 
-    foreach(GcWindow *chart, charts) {
+    foreach(GcChartWindow *chart, charts) {
         QString chartTitle = chart->property("title").toString();
         chart->setProperty("title", titleMap.value(chartTitle, chartTitle));
     }
@@ -1498,4 +1591,155 @@ HomeWindow::presetSelected(int n)
             }
         }
     }
+}
+
+/*--------------------------------------------------------------------------------
+ *  Import Chart Dialog - select/deselect charts before importing them
+ * -----------------------------------------------------------------------------*/
+ImportChartDialog::ImportChartDialog(Context *context, QList<QMap<QString,QString> >list, QWidget *parent) : QDialog(parent), context(context), list(list)
+{
+    setWindowFlags(windowFlags());
+    setWindowTitle(tr("Import Charts"));
+    setWindowModality(Qt::ApplicationModal);
+    setMinimumWidth(450);
+    QVBoxLayout *layout = new QVBoxLayout(this);
+
+    table = new QTableWidget(this);
+    cancel = new QPushButton(tr("Cancel"), this);
+    import = new QPushButton(tr("Import"), this);
+
+    // set table
+#ifdef Q_OS_MAC
+    table->setAttribute(Qt::WA_MacShowFocusRect, 0);
+#endif
+    table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    table->setRowCount(list.count());
+    table->setColumnCount(3);
+    QStringList headings;
+    headings<<"";
+    headings<<"View";
+    headings<<"Title";
+    table->setHorizontalHeaderLabels(headings);
+    table->setSortingEnabled(false);
+    table->verticalHeader()->hide();
+    table->setShowGrid(false);
+    table->setSelectionMode(QAbstractItemView::NoSelection);
+    table->horizontalHeader()->setStretchLastSection(true);
+#if QT_VERSION > 0x050200
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+#endif
+
+    // Populate the list of named searches
+    for(int i=0; i<list.count(); i++) {
+
+        // select XXX fix widget...
+        QCheckBox *c = new QCheckBox(this);
+        c->setChecked(true);
+        table->setCellWidget(i, 0, c);
+
+        QString view = list[i].value("VIEW");
+
+        // convert to user name for view from here, since
+        // they won't recognise the names used internally
+        // as they need to be translated too
+        if (view == "diary") view = tr("Diary");
+        if (view == "home") view = tr("Trends");
+        if (view == "analysis") view = tr("Activities");
+        if (view == "train") view = tr("Train");
+
+        QTableWidgetItem *t;
+#ifndef GC_HAVE_ICAL
+        // diary not available!
+        if (view == tr("Diary"))  view = tr("Trends");
+        // View
+        t = new QTableWidgetItem;
+        t->setText(view);
+        t->setFlags(t->flags() & (~Qt::ItemIsEditable));
+        table->setItem(i, 1, t);
+
+#else
+        // we should be able to select trend/diary
+        if (view == tr("Diary") || view == tr("Trends")) {
+
+            QComboBox *com = new QComboBox(this);
+            com->addItem(tr("Diary"));
+            com->addItem(tr("Trends"));
+            table->setCellWidget(i,1,com);
+            if (view == tr("Diary")) com->setCurrentIndex(0);
+            else com->setCurrentIndex(1);
+
+        } else {
+
+            // View
+            t = new QTableWidgetItem;
+            t->setText(view);
+            t->setFlags(t->flags() & (~Qt::ItemIsEditable));
+            table->setItem(i, 1, t);
+
+        }
+#endif
+
+        // title
+        t = new QTableWidgetItem;
+        t->setText(list[i].value("title"));
+        t->setFlags(t->flags() & (~Qt::ItemIsEditable));
+        table->setItem(i, 2, t);
+
+    }
+
+    layout->addWidget(table);
+
+    QHBoxLayout *buttons = new QHBoxLayout;
+    buttons->addStretch();
+    buttons->addWidget(import);
+    buttons->addWidget(cancel);
+    layout->addLayout(buttons);
+
+    connect(import, SIGNAL(clicked(bool)), this, SLOT(importClicked()));
+    connect(cancel, SIGNAL(clicked(bool)), this, SLOT(cancelClicked()));
+}
+
+void
+ImportChartDialog::importClicked()
+{
+    // do stuff
+    for(int i=0; i<list.count(); i++) {
+
+        // is it checked?
+        if (static_cast<QCheckBox*>(table->cellWidget(i,0))->isChecked()) {
+
+            // where we putting it?
+            QString view;
+
+            // is there a combo box?
+            QComboBox *com = static_cast<QComboBox*>(table->cellWidget(i,1));
+            if (com) {
+                switch(com->currentIndex()) {
+
+                    case 0 : view = tr("Diary"); break;
+
+                    default:
+                    case 1 : view = tr("Trends"); break;
+                }
+            } else {
+                view = table->item(i,1)->text();
+            }
+
+            int x=0;
+            if (view == tr("Trends"))      { x=0; context->mainWindow->selectHome(); }
+            if (view == tr("Activities"))  { x=1; context->mainWindow->selectAnalysis(); }
+            if (view == tr("Diary"))       { x=2; context->mainWindow->selectDiary(); }
+            if (view == tr("Train"))       { x=3; context->mainWindow->selectTrain(); }
+
+            // add to the currently selected tab and select if only adding one chart
+            context->mainWindow->athleteTab()->view(x)->importChart(list[i], (list.count()==1));
+        }
+    }
+    accept();
+}
+
+void
+ImportChartDialog::cancelClicked()
+{
+    accept();
 }

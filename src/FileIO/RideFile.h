@@ -34,6 +34,8 @@ class Specification;
 class IntervalItem;
 class WPrime;
 class RideFile;
+class XDataSeries;
+class XDataPoint;
 struct RideFilePoint;
 struct RideFileDataPresent;
 class RideFileInterval;
@@ -180,6 +182,7 @@ class RideFile : public QObject // QObject to emit signals
 
         // utility
         static unsigned int computeFileCRC(QString); 
+        void updateDataTag();
 
         // Constructor / Destructor
         RideFile();
@@ -202,11 +205,14 @@ class RideFile : public QObject // QObject to emit signals
                           wbal, tcore,
                           none }; // none must ALWAYS be last
 
+        enum conversion { original, pace };
+
         // NA = Not Applicable - i.e Temperature no recorded value
         // NIL = Not available, but still set to zero for compatibility
         //       We should consider looking at code to handle NIL / NA 
         enum specialValues { NA = -255, NIL = 0 };
         typedef enum seriestype SeriesType;
+        typedef enum conversion Conversion;
         static SeriesType lastSeriesType() { return none; }
 
         static QStringList symbols(); // get a list of symbols for each series to use in a formula
@@ -215,6 +221,8 @@ class RideFile : public QObject // QObject to emit signals
 
         static QString seriesName(SeriesType, bool compat=false);
         static QString unitName(SeriesType, Context *context);
+        static QString formatValueWithUnit(double value, SeriesType series, Conversion conversion, Context *context, bool isSwim);
+
         static int decimalsFor(SeriesType series);
         static double maximumFor(SeriesType series);
         static double minimumFor(SeriesType series);
@@ -319,6 +327,11 @@ class RideFile : public QObject // QObject to emit signals
  
         WPrime *wprimeData(); // return wprime, init/refresh if needed
 
+        // XDATA
+        XDataSeries *xdata(QString name);
+        void addXData(QString name, XDataSeries *series);
+        const QMap<QString,XDataSeries*> &xdata() const { return xdata_; }
+
         // METRIC OVERRIDES
         QMap<QString,QMap<QString,QString> > metricOverrides;
 
@@ -394,6 +407,9 @@ class RideFile : public QObject // QObject to emit signals
         void updateAvg(RideFilePoint* point);
 
         bool dstale; // is derived data up to date?
+
+        // xdata series
+        QMap<QString, XDataSeries*> xdata_;
 
         // data required to compute headwind based on weather broadcast
         double windSpeed_, windHeading_;
@@ -497,6 +513,39 @@ class RideFileIterator {
     private:
         RideFile *f;
         int start, stop, index;
+};
+
+// each sample has up to 8 strings or values
+class XDataPoint {
+public:
+    XDataPoint() {
+        secs=km=0;
+        for(int i=0; i<8; i++) {
+            number[i]=0;
+            string[i]="";
+        }
+    }
+    XDataPoint (const XDataPoint &other) {
+        this->secs=other.secs;
+        this->km=other.km;
+        for(int i=0; i<8; i++) {
+            this->number[i]= other.number[i];
+            this->string[i]= other.string[i];
+        }
+    }
+
+    double secs, km;
+    double number[8];
+    QString string[8];
+};
+
+class XDataSeries {
+public:
+    ~XDataSeries() { foreach(XDataPoint *p, datapoints) delete p; }
+
+    QString name;
+    QStringList valuename;
+    QVector<XDataPoint*> datapoints;
 };
 
 struct RideFileReader {

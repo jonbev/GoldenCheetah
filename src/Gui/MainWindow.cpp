@@ -114,6 +114,7 @@
 #include "CloudDBChart.h"
 #include "CloudDBCurator.h"
 #include "CloudDBStatus.h"
+#include "GcUpgrade.h"
 #endif
 
 
@@ -589,12 +590,13 @@ MainWindow::MainWindow(const QDir &home)
 #ifdef GC_HAS_CLOUD_DB
     // CloudDB options
     optionsMenu->addSeparator();
-    optionsMenu->addAction(tr("CloudDB Status..."), this, SLOT(cloudDBshowStatus()));
-    QMenu *cloudDBMenu = optionsMenu->addMenu(tr("CloudDB Contributions"));
+    optionsMenu->addAction(tr("Cloud Status..."), this, SLOT(cloudDBshowStatus()));
+
+    QMenu *cloudDBMenu = optionsMenu->addMenu(tr("Cloud Contributions"));
     cloudDBMenu->addAction(tr("Maintain charts"), this, SLOT(cloudDBuserEditChart()));
 
     if (CloudDBCommon::addCuratorFeatures) {
-        QMenu *cloudDBCurator = optionsMenu->addMenu(tr("CloudDB Curator"));
+        QMenu *cloudDBCurator = optionsMenu->addMenu(tr("Cloud Curator"));
         cloudDBCurator->addAction(tr("Curate charts"), this, SLOT(cloudDBcuratorEditChart()));
     }
 
@@ -666,6 +668,11 @@ MainWindow::MainWindow(const QDir &home)
 #endif
     viewMenu->addSeparator();
     subChartMenu = viewMenu->addMenu(tr("Add Chart"));
+#ifdef GC_HAS_CLOUD_DB
+    viewMenu->addAction(tr("Upload Chart..."), this, SLOT(exportChartToCloudDB()));
+    viewMenu->addAction(tr("Download Chart..."), this, SLOT(addChartFromCloudDB()));
+    viewMenu->addSeparator();
+#endif
     viewMenu->addAction(tr("Reset Layout"), this, SLOT(resetWindowLayout()));
     styleAction = viewMenu->addAction(tr("Tabbed not Tiled"), this, SLOT(toggleStyle()));
     styleAction->setCheckable(true);
@@ -908,6 +915,52 @@ MainWindow::addChart(QAction*action)
     if (id != GcWindowTypes::None)
         currentTab->addChart(id); // called from MainWindow to inset chart
 }
+
+#ifdef GC_HAS_CLOUD_DB
+
+void
+MainWindow::exportChartToCloudDB()
+{
+    // upload the current chart selected to the chart db
+    // called from the sidebar menu
+    HomeWindow *page=currentTab->view(currentTab->currentView())->page();
+    if (page->currentStyle == 0 && page->currentChart())
+        page->currentChart()->exportChartToCloudDB();
+}
+
+void
+MainWindow::addChartFromCloudDB()
+{
+    if (!(appsettings->cvalue(currentTab->context->athlete->cyclist, GC_CLOUDDB_TC_ACCEPTANCE, false).toBool())) {
+       CloudDBAcceptConditionsDialog acceptDialog(currentTab->context->athlete->cyclist);
+       acceptDialog.setModal(true);
+       if (acceptDialog.exec() == QDialog::Rejected) {
+          return;
+       };
+    }
+
+    if (currentTab->context->cdbChartListDialog == NULL) {
+        currentTab->context->cdbChartListDialog = new CloudDBChartListDialog();
+    }
+
+    if (currentTab->context->cdbChartListDialog->prepareData(currentTab->context->athlete->cyclist, CloudDBCommon::UserImport, currentTab->currentView())) {
+        if (currentTab->context->cdbChartListDialog->exec() == QDialog::Accepted) {
+            QList<QMap<QString,QString> > charts;
+
+            // get selected chartDef
+            QList<QString> chartDefs = currentTab->context->cdbChartListDialog->getSelectedSettings();
+
+            // parse charts into property pairs
+            foreach (QString chartDef, chartDefs) {
+                QList<QMap<QString,QString> > properties = GcChartWindow::chartPropertiesFromString(chartDef);
+                for (int i = 0; i< properties.size(); i++) {
+                    currentTab->context->mainWindow->athleteTab()->view(currentTab->currentView())->importChart(properties.at(i), false);
+                }
+            }
+        }
+    }
+}
+#endif
 
 void
 MainWindow::setStyleFromSegment(int segment)
@@ -1279,11 +1332,16 @@ MainWindow::dropEvent(QDropEvent *event)
     // is this a chart file ?
     QStringList filenames;
     QList<LTMSettings> imported;
+    QStringList list;
     for(int i=0; i<urls.count(); i++) {
 
         QString filename = QFileInfo(urls.value(i).toLocalFile()).absoluteFilePath();
 
-        if (filename.endsWith(".xml", Qt::CaseInsensitive)) {
+        if (filename.endsWith(".gchart", Qt::CaseInsensitive)) {
+            // add to the list of charts to import
+            list << filename;
+
+        } else if (filename.endsWith(".xml", Qt::CaseInsensitive)) {
 
             QFile chartsFile(filename);
 
@@ -1313,7 +1371,7 @@ MainWindow::dropEvent(QDropEvent *event)
         currentTab->context->notifyPresetsChanged();
 
         // tell the user
-        QMessageBox::information(this, tr("Chart Import"), QString(tr("Imported %1 charts")).arg(imported.count()));
+        QMessageBox::information(this, tr("Chart Import"), QString(tr("Imported %1 metric charts")).arg(imported.count()));
 
         // switch to trend view if we aren't on it
         selectHome();
@@ -1322,6 +1380,8 @@ MainWindow::dropEvent(QDropEvent *event)
         currentTab->context->notifyPresetSelected(currentTab->context->athlete->presets.count()-1);
     }
 
+    // are there any .gcharts to import?
+    if (list.count())  importCharts(list);
 
     // if there is anything left, process based upon view...
     if (filenames.count()) {
@@ -1338,6 +1398,22 @@ MainWindow::dropEvent(QDropEvent *event)
     }
     return;
 }
+
+void
+MainWindow::importCharts(QStringList list)
+{
+    QList<QMap<QString,QString> > charts;
+
+    // parse charts into property pairs
+    foreach(QString filename, list) {
+        charts << GcChartWindow::chartPropertiesFromFile(filename);
+    }
+
+    // And import them with a dialog to select location
+    ImportChartDialog importer(currentTab->context, charts, this);
+    importer.exec();
+}
+
 
 /*----------------------------------------------------------------------
  * Ride Library Functions

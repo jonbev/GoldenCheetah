@@ -114,6 +114,10 @@ SmlParser::endElement(const QString&, const QString&, const QString& qName)
             else if (buffer.contains("Swimming", Qt::CaseInsensitive))
                 rideFile->setTag("Sport", "Swim");
         }
+        else if (qName == "PoolLength")
+        {
+            rideFile->setTag("Pool Length", buffer);
+        }
         return true;
     }
     else if (qName == "Lap")
@@ -278,8 +282,8 @@ SmlParser::endElement(const QString&, const QString&, const QString& qName)
             double rr = strRR.toDouble() / 1000.0;
             if (ewmaRR < 0.0) ewmaRR = rr;
             else ewmaRR += (rr - ewmaRR)/ewmaTC;
-            if (secs + rr >= trunc(secs) + 1.0) {
-                rideFile->setPointValue(rideFile->timeIndex(secs), rideFile->hr, round(60.0/ ewmaRR));
+            for (int i = 0; secs + rr >= trunc(secs) + i + 1; i++) {
+                rideFile->dataPoints()[rideFile->timeIndex(secs + i)]->hr = round(60.0/ ewmaRR);
             }
             secs += rr;
         }

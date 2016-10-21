@@ -16,7 +16,6 @@
  * Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#include "R.h"
 #include "RTool.h"
 #include "RChart.h"
 #include "RSyntax.h"
@@ -33,7 +32,8 @@ RConsole::RConsole(Context *context, RChart *parent)
 {
     setSizePolicy(QSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding));
     setFrameStyle(QFrame::NoFrame);
-    document()->setMaximumBlockCount(10240);
+    setAcceptRichText(false);
+    document()->setMaximumBlockCount(512); // lets not get carried away!
     putData(GColor(CPLOTMARKER), QString(tr("R Console (%1)").arg(rtool->version)));
     putData(GCColor::invertColor(GColor(CPLOTBACKGROUND)), "\n> ");
 
@@ -93,6 +93,12 @@ void RConsole::setLocalEchoEnabled(bool set)
 
 void RConsole::keyPressEvent(QKeyEvent *e)
 {
+    // if running a script we only process ESC
+    if (rtool && rtool->canvas) {
+        if (e->type() != QKeyEvent::KeyPress || e->key() != Qt::Key_Escape) return;
+    }
+
+    // otherwise lets go
     switch (e->key()) {
     case Qt::Key_Up:
         if (hpos) {
@@ -119,13 +125,20 @@ void RConsole::keyPressEvent(QKeyEvent *e)
         if (textCursor().position() - textCursor().block().position() > 2) QTextEdit::keyPressEvent(e);
         break;
 
+    case Qt::Key_Escape: // R typically uses ESC to cancel
     case Qt::Key_C:
         {
             Qt::KeyboardModifiers kmod = static_cast<QInputEvent*>(e)->modifiers();
             bool ctrl = (kmod & Qt::ControlModifier) != 0;
 
-            if (ctrl) {
-                // ^C needs to clear program and go to next line
+            if (e->key() == Qt::Key_Escape || ctrl) {
+
+                // are we doing something?
+                if (rtool && rtool->canvas) {
+                    rtool->cancel();
+                }
+
+                // ESC or ^C needs to clear program and go to next line
                 rtool->R->program.clear();
 
                 QTextCursor move = textCursor();
@@ -178,6 +191,7 @@ void RConsole::keyPressEvent(QKeyEvent *e)
                 // so only print it out if its actually been set
                 SEXP ret = NULL;
 
+                rtool->cancelled = false;
                 int rc = rtool->R->parseEval(line, ret);
 
                 // if this isn't an assignment then print the result
@@ -270,6 +284,17 @@ RChart::RChart(Context *context, bool ridesummary) : GcChartWindow(context), con
     // then disable the RConsole altogether.
     if (rtool) {
 
+        // reveal controls
+        QHBoxLayout *rev = new QHBoxLayout();
+        showCon = new QCheckBox(tr("Show Console"), this);
+        showCon->setChecked(true);
+
+        rev->addStretch();
+        rev->addWidget(showCon);
+        rev->addStretch();
+
+        setRevealLayout(rev);
+
         leftsplitter = new QSplitter(Qt::Vertical, this);
         leftsplitter->setSizePolicy(QSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding));
         leftsplitter->setHandleWidth(1);
@@ -278,6 +303,7 @@ RChart::RChart(Context *context, bool ridesummary) : GcChartWindow(context), con
         script = new  QTextEdit(this);
         script->setSizePolicy(QSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding));
         script->setFrameStyle(QFrame::NoFrame);
+        script->setAcceptRichText(false);
         QFont courier("Courier", QFont().pointSize());
         script->setFont(courier);
         QPalette p = palette();
@@ -298,6 +324,7 @@ RChart::RChart(Context *context, bool ridesummary) : GcChartWindow(context), con
 
         leftsplitter->addWidget(script);
         console = new RConsole(context, this);
+        console->setSizePolicy(QSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding));
         leftsplitter->addWidget(console);
 
         splitter = new QSplitter(Qt::Horizontal, this);
@@ -310,6 +337,11 @@ RChart::RChart(Context *context, bool ridesummary) : GcChartWindow(context), con
         canvas = new RCanvas(context, this);
         canvas->setSizePolicy(QSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding));
         splitter->addWidget(canvas);
+
+        // make splitter reasonable
+        QList<int> sizes;
+        sizes << 300 << 500;
+        splitter->setSizes(sizes);
 
         if (ridesummary) {
             connect(this, SIGNAL(rideItemChanged(RideItem*)), this, SLOT(runScript()));
@@ -326,13 +358,77 @@ RChart::RChart(Context *context, bool ridesummary) : GcChartWindow(context), con
             connect(context, SIGNAL(compareDateRangesChanged()), this, SLOT(runScript()));
         }
 
+        // we apply BOTH filters, so update when either change
+        connect(context, SIGNAL(filterChanged()), this, SLOT(runScript()));
+        connect(context, SIGNAL(homeFilterChanged()), this, SLOT(runScript()));
+
+        // reveal controls
+        connect(showCon, SIGNAL(stateChanged(int)), this, SLOT(showConChanged(int)));
+
+        // config changes
+        connect(context, SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));
+        configChanged(CONFIG_APPEARANCE);
+
+        // filter ESC so we can stop scripts
+        installEventFilter(this);
+        installEventFilter(console);
+        installEventFilter(splitter);
+        installEventFilter(canvas);
+
     } else {
 
         // not starting
         script = NULL;
+        splitter = NULL;
         console = NULL;
         canvas = NULL;
+        showCon = NULL;
+        leftsplitter = NULL;
     }
+}
+
+bool
+RChart::eventFilter(QObject *, QEvent *e)
+{
+    // not running a script
+    if (!rtool || !rtool->canvas) return false;
+
+    // is it an ESC key?
+    if (e->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(e)->key() == Qt::Key_Escape) {
+        // stop!
+        rtool->cancel();
+        return true;
+    }
+
+    // otherwise do nothing
+    return false;
+}
+
+void
+RChart::configChanged(qint32)
+{
+    if (!ridesummary) setProperty("color", GColor(CTRENDPLOTBACKGROUND));
+    else setProperty("color", GColor(CPLOTBACKGROUND));
+
+    // tinted palette for headings etc
+    QPalette palette;
+    palette.setBrush(QPalette::Window, QBrush(GColor(CPLOTBACKGROUND)));
+    palette.setColor(QPalette::WindowText, GColor(CPLOTMARKER));
+    palette.setColor(QPalette::Text, GColor(CPLOTMARKER));
+    palette.setColor(QPalette::Base, GCColor::alternateColor(GColor(CPLOTBACKGROUND)));
+    setPalette(palette);
+}
+
+void
+RChart::setConsole(bool show)
+{
+    if (showCon) showCon->setChecked(show);
+}
+
+void
+RChart::showConChanged(int state)
+{
+    if (leftsplitter) leftsplitter->setVisible(state);
 }
 
 QString
@@ -351,15 +447,47 @@ RChart::setScript(QString string)
     text = string;
 }
 
+QString
+RChart::getState() const
+{
+    //XXX FIXME
+    //if (rtool && splitter)  return QString(splitter->saveState());
+    //else return "";
+    return "";
+}
+
+void
+RChart::setState(QString)
+{
+    //XXX FIXME
+    //if (rtool && splitter && b != "") splitter->restoreState(QByteArray(b.toLatin1()));
+}
+
 
 void
 RChart::runScript()
 {
+    // don't run until we can be seen!
+    if (!isVisible()) return;
+
     if (script->toPlainText() != "") {
+
+        // hourglass .. for long running ones this helps user know its busy
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+
+        // turn off updates for a sec
+        setUpdatesEnabled(false);
 
         // run it !!
         rtool->context = context;
         rtool->canvas = canvas;
+
+        // set default page size
+        rtool->width = rtool->height = 500;
+
+        // set to defaults with gc applied
+        rtool->cancelled = false;
+        rtool->R->parseEvalQNT("par(par.gc)\n");
 
         QString line = script->toPlainText();
 
@@ -396,6 +524,12 @@ RChart::runScript()
             // clear
             canvas->newPage();
         }
+
+        // turn off updates for a sec
+        setUpdatesEnabled(true);
+
+        // reset cursor
+        QApplication::restoreOverrideCursor();
 
         // if the program expects more we clear it, otherwise
         // weird things can happen!

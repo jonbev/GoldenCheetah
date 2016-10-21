@@ -88,6 +88,7 @@
 
 #define GC_HOMEDIR                      "<system>homedirectory"
 #define GC_START_HTTP                   "<system>starthttp"
+#define GC_EMBED_R                      "<system>embedR"
 
 #define GC_SETTINGS_LAST                "<system>mainwindow/lastOpened"
 #define GC_SETTINGS_MAIN_GEOM           "<system>mainwindow/geometry"
@@ -164,6 +165,8 @@
 #define GC_DPFHRS_MAX                   "<global-general>dataprocess/fixhrspikes/max"
 #define GC_DPDP_BIKEWEIGHT              "<global-general>dataprocess/fixderivepower/bikewheight"
 #define GC_DPDP_CRR                     "<global-general>dataprocess/fixderivepower/crr"
+#define GC_DPRP_EQUIPWEIGHT             "<global-general>dataprocess/fixrunningpower/equipwheight"
+#define GC_DPDR_DRAFTM                  "<global-general>dataprocess/fixrunningpower/draftm"
 #define GC_DPFV_MA                     "<global-general>dataprocess/fixspeed/ma"
 #define GC_CAD2SMO2                     "<global-general>dataprocess/fixmoxy/cad2smo2"
 #define GC_SPD2THB			"<global-general>dataprocess/fixmoxy/spd2thb"
@@ -177,6 +180,7 @@
 #define GC_DEV_SPEC                     "<global-trainmode>devicespec"
 #define GC_DEV_PROF                     "<global-trainmode>deviceprof"
 #define GC_DEV_TYPE                     "<global-trainmode>devicetype"
+#define GC_DEV_STRIDE                   "<global-trainmode>devicestride"
 #define GC_DEV_DEF                      "<global-trainmode>devicedef"
 #define GC_DEV_WHEEL                    "<global-trainmode>devicewheel"
 #define GC_DEV_VIRTUAL                  "<global-trainmode>devicepostProcess"
@@ -231,7 +235,6 @@
 
 #define GC_CLOUDDB_TC_ACCEPTANCE       "<athlete-preferences>clouddb/acceptance"                  // bool
 #define GC_CLOUDDB_TC_ACCEPTANCE_DATE  "<athlete-preferences>clouddb/acceptancedate"              // date/time string of acceptance
-#define GC_CLOUDDB_NICKNAME            "<athlete-preferences>clouddb/nickname"
 #define GC_CLOUDDB_EMAIL               "<athlete-preferences>clouddb/email"
 
 // ride navigator

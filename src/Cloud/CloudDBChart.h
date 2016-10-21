@@ -37,7 +37,10 @@
 
 struct ChartAPIv1 {
     CommonAPIHeaderV1 Header;
-    QString ChartXML;
+    QString ChartSport;
+    QString ChartType;
+    QString ChartView;
+    QString ChartDef;
     QByteArray Image;
     QString CreatorNick;
     QString CreatorEmail;
@@ -76,7 +79,7 @@ private:
     QString g_cacheDir;
 
     static const int chart_magic_string = 1029384756;
-    static const int chart_cache_version = 1;
+    static const int chart_cache_version = 3;
 
     QString  g_chart_url_base;
     QString  g_chart_url_header;
@@ -100,8 +103,10 @@ struct ChartWorkingStructure {
     QString language;
     QDateTime createdAt;
     QPixmap image;
-    bool validLTMSettings;
-    LTMSettings ltmSettings;
+    QString gchartType;
+    QString gchartView;
+    QString gchartDef;
+    QString gchartSport;
     bool createdByMe;
 };
 
@@ -114,8 +119,8 @@ public:
     CloudDBChartListDialog();
     ~CloudDBChartListDialog();
 
-    bool prepareData(QString athlete, CloudDBCommon::UserRole role);
-    LTMSettings getSelectedSettings() {return g_selected; }
+    bool prepareData(QString athlete, CloudDBCommon::UserRole role, int chartView = 0);
+    QList<QString> getSelectedSettings() {return g_selected; }
 
     // re-implemented
     void closeEvent(QCloseEvent* event);
@@ -130,6 +135,7 @@ private slots:
     void ownChartsToggled(bool);
     void toggleTextFilterApply();
     void curationStateFilterChanged(int);
+    void sportComboFilterChanged(int);
     void languageFilterChanged(int);
     void textFilterEditingFinished();
     void cellDoubleClicked(int, int);
@@ -168,6 +174,7 @@ private:
     QCheckBox *ownChartsOnly;
     QComboBox *curationStateCombo;
     QComboBox *langCombo;
+    QComboBox *sportCombo;
     QLineEdit *textFilter;
     QPushButton *textFilterApply;
 
@@ -177,11 +184,12 @@ private:
     QVBoxLayout *mainLayout;
 
     // UserRole - UserGet
-    LTMSettings g_selected;
+    QList<QString> g_selected;
     QPushButton *addAndCloseUserGetButton, *closeUserGetButton;
 
     // UserRole - UserEdit
     QPushButton *deleteUserEditButton, *editUserEditButton, *closeUserEditButton;
+    int g_chartView;
 
     // UserRole - Curator Edit
     QPushButton *curateCuratorEditButton, *editCuratorEditButton, *deleteCuratorEditButton, *closeCuratorButton;
@@ -238,8 +246,6 @@ private slots:
 
     void nameTextChanged(QString);
     void nameEditingFinished();
-    void nickNameTextChanged(QString);
-    void nickNameEditingFinished();
     void emailTextChanged(QString);
     void emailEditingFinished();
 
@@ -256,6 +262,7 @@ private:
     bool nameOk;
 
     QComboBox *langCombo;
+    QComboBox *sportCombo;
 
     QLabel *image;
 
@@ -263,7 +270,6 @@ private:
     QString descriptionDefault;
 
     QLineEdit *nickName;
-    bool nickNameOk;
 
     QLineEdit *email;
     bool emailOk;

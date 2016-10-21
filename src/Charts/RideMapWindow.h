@@ -53,6 +53,7 @@ class QVBoxLayout;
 class QTabWidget;
 class RideMapWindow;
 class IntervalSummaryWindow;
+class SmallPlot;
 
 // trick the maps api into ignoring gestures by
 // pretending to be chrome. see: http://developer.qt.nokia.com/forums/viewthread/1643/P15
@@ -121,6 +122,11 @@ class RideMapWindow : public GcChartWindow
     // properties can be saved/restored/set by the layout manager
 
     Q_PROPERTY(int maptype READ mapType WRITE setMapType USER true)
+    Q_PROPERTY(bool showmarkers READ showMarkers WRITE setShowMarkers USER true)
+    Q_PROPERTY(bool showfullplot READ showFullPlot WRITE setFullPlot USER true)
+    Q_PROPERTY(int osmts READ osmTS WRITE setOsmTS USER true)
+    Q_PROPERTY(QString osmtsurl READ osmTSUrl WRITE setOsmTSUrl USER true)
+
 
     public:
         typedef enum {
@@ -133,16 +139,37 @@ class RideMapWindow : public GcChartWindow
         ~RideMapWindow();
         bool first;
 
-        QComboBox *mapCombo;
-        QCheckBox *showMarkersCk;
+
+        QComboBox *mapCombo, *tileCombo;
+        QCheckBox *showMarkersCk, *showFullPlotCk;
+        QLabel *osmCustomTSTitle, *osmCustomTSLabel, *osmCustomTSUrlLabel;
+        QLineEdit *osmCustomTSUrl;
 
         // set/get properties
         int mapType() const { return mapCombo->currentIndex(); }
         void setMapType(int x) { mapCombo->setCurrentIndex(x); }
 
+        bool showMarkers() const { return ( showMarkersCk->checkState() == Qt::Checked); }
+        void setShowMarkers(bool x) { if (x) showMarkersCk->setCheckState(Qt::Checked); else showMarkersCk->setCheckState(Qt::Unchecked) ;}
+
+        bool showFullPlot() const { return ( showFullPlotCk->checkState() == Qt::Checked); }
+        void setFullPlot(bool x) { if (x) showFullPlotCk->setCheckState(Qt::Checked); else showFullPlotCk->setCheckState(Qt::Unchecked) ;}
+
+        int osmTS() const { return ( tileCombo->itemData(tileCombo->currentIndex()).toInt()); }
+        void setOsmTS(int x) { tileCombo->setCurrentIndex(tileCombo->findData(x)); /*setTileServerUrlForTileType(x);*/}
+
+        QString osmTSUrl() const { return osmCustomTSUrl->text(); }
+        void setOsmTSUrl(QString x) { osmCustomTSUrl->setText(x) ;}
+
+
     public slots:
         void mapTypeSelected(int x);
+        void tileTypeSelected(int x);
         void showMarkersChanged(int value);
+        void showFullPlotChanged(int value);
+        void osmCustomTSURLEditingFinished();
+        void osmCustomTSURLTextChanged(QString text);
+
 
         void forceReplot();
         void rideSelected();
@@ -174,6 +201,9 @@ class RideMapWindow : public GcChartWindow
         bool firstShow;
         IntervalSummaryWindow *overlayIntervals;
 
+        QString osmTileServerUrlDefault;
+        QString osmCurrentTileServerUrl;
+
         QColor GetColor(int watts);
         void createHtml();
 
@@ -182,8 +212,12 @@ class RideMapWindow : public GcChartWindow
         void updateFrame();
 
     protected:
+        SmallPlot *smallPlot;
         bool event(QEvent *event);
         bool stale;
+
+        void setCustomTSWidgetVisible(bool value);
+        void setTileServerUrlForTileType(int x);
 };
 
 #endif

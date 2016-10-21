@@ -22,6 +22,15 @@
 #include "Context.h"
 #include "Colors.h"
 #include "Settings.h"
+#include "Utils.h"
+#include "mvjson.h"
+#include "LTMSettings.h"
+
+#ifdef GC_HAS_CLOUD_DB
+#include "CloudDBChart.h"
+#include "CloudDBCommon.h"
+#include "GcUpgrade.h"
+#endif
 
 #include <QDebug>
 #include <QColor>
@@ -46,8 +55,8 @@ void GcWindow::setControls(QWidget *x)
     emit controlsChanged(_controls);
 
     if (x != NULL) {
-        menu->clear();
-        menu->addAction(tr("All Chart Settings"), this, SIGNAL(showControls()));
+        menu->addAction(tr("Chart Settings..."), this, SIGNAL(showControls()));
+        menu->addSeparator();
 
         // add any other actions
         if (actions.count()) {
@@ -686,6 +695,9 @@ GcChartWindow::GcChartWindow(Context *context) : GcWindow(context), context(cont
 
     _mainWidget = new QWidget(this);
     _mainWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    _chart = new QWidget(this);
+    _chart->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    _chart->hide();
     _blank = new QWidget(this);
     _blank->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
@@ -694,11 +706,13 @@ GcChartWindow::GcChartWindow(Context *context) : GcWindow(context), context(cont
     _layout->setCurrentWidget(_mainWidget);
 
     // Main layout
-    _mainLayout = new QGridLayout();
+    _mainLayout = new QStackedLayout(_mainWidget);
+    _mainLayout->setStackingMode(QStackedLayout::StackAll);
     _mainLayout->setContentsMargins(2,2,2,2);
 
     // reveal widget
-    _revealControls = new QWidget();
+    _revealControls = new QWidget(this);
+    _revealControls->hide();
     _revealControls->setFixedHeight(50);
     _revealControls->setStyleSheet("background-color: rgba(100%, 100%, 100%, 80%)");
     _revealControls->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
@@ -720,10 +734,8 @@ GcChartWindow::GcChartWindow(Context *context) : GcWindow(context), context(cont
     _unrevealTimer = new QTimer();
     connect(_unrevealTimer, SIGNAL(timeout()), this, SLOT(hideRevealControls()));
 
-    _revealControls->hide();
-
-    _mainLayout->addWidget(_revealControls,0,0, Qt::AlignTop);
-    _mainWidget->setLayout(_mainLayout);
+    _mainLayout->addWidget(_chart);
+    _mainLayout->addWidget(_revealControls);
 
     connect(this, SIGNAL(colorChanged(QColor)), this, SLOT(colorChanged(QColor)));
 
@@ -781,7 +793,8 @@ void
 GcChartWindow:: setChartLayout(QLayout *layout)
 {
     _chartLayout = layout;
-    _mainLayout->addLayout(_chartLayout,0,0, Qt::AlignTop);
+    _chart->setLayout(_chartLayout);
+    _chart->show();
 }
 
 void
@@ -789,6 +802,7 @@ GcChartWindow:: setRevealLayout(QLayout *layout)
 {
     _revealLayout = layout;
     _revealControls->setLayout(_revealLayout);
+    _revealControls->hide();
 }
 
 void
@@ -803,22 +817,28 @@ GcChartWindow::setControls(QWidget *x)
 {
     GcWindow::setControls(x);
 
-    if (x != NULL) {
-        menu->clear();
-        menu->addAction(tr("All Chart Settings"), this, SIGNAL(showControls()));
-        menu->addAction(tr("Export Chart Image..."), this, SLOT(saveImage()));
-        // add any other actions
-        if (actions.count()) {
-            if (actions.count() > 1) menu->addSeparator();
+    menu->clear();
+    // if x == NULL only edit the name
+    menu->addAction(tr("Chart Settings..."), this, SIGNAL(showControls()));
+    menu->addSeparator();
 
-            foreach(QAction *act, actions) {
-                menu->addAction(act->text(), act, SIGNAL(triggered()));
-            }
+    // add any other actions
+    if (actions.count()) {
+        if (actions.count() > 1) menu->addSeparator();
 
-            if (actions.count() > 1) menu->addSeparator();
+        foreach(QAction *act, actions) {
+            menu->addAction(act->text(), act, SIGNAL(triggered()));
         }
-        menu->addAction(tr("Remove Chart"), this, SLOT(_closeWindow()));
+
+        if (actions.count() > 1) menu->addSeparator();
     }
+
+    menu->addAction(tr("Export Chart ..."), this, SLOT(saveChart()));
+    menu->addAction(tr("Export Chart Image..."), this, SLOT(saveImage()));
+#ifdef GC_HAS_CLOUD_DB
+    menu->addAction(tr("Upload Chart..."), this, SLOT(exportChartToCloudDB()));
+#endif
+    menu->addAction(tr("Remove Chart"), this, SLOT(_closeWindow()));
 }
 
 void
@@ -880,3 +900,216 @@ void GcChartWindow:: saveImage()
         picture.save(fileName);
     }
 }
+
+// version of the .gchart format being used
+static int gcChartVersion = 1;
+
+void
+GcChartWindow::saveChart()
+{
+
+    // where to save it?
+    QString suffix; // what was selected?
+    QString filename = QFileDialog::getSaveFileName(this, tr("Export Chart"),
+                       QDir::homePath()+"/"+ property("title").toString() + ".gchart",
+                       ("*.gchart;;"), &suffix);
+
+    if (filename.length() == 0) return;
+
+    QFile outfile(filename);
+    if (!outfile.open(QFile::WriteOnly)) {
+        QMessageBox oops(QMessageBox::Critical, tr("Export Failed"),
+                         tr("Failed to export chart, please check permissions"));
+        oops.exec();
+        return;
+    }
+
+    // lets go to it
+    QTextStream out(&outfile);
+    out.setCodec ("UTF-8");
+
+    serializeChartToQTextStream(out);
+
+    // all done
+    outfile.close();
+}
+
+void
+GcChartWindow::serializeChartToQTextStream(QTextStream& out) {
+
+    // iterate over chart properties
+    const QMetaObject *m = metaObject();
+
+    out <<"{\n\t\"CHART\":{\n";
+    out <<"\t\t\"VERSION\":\"" << QString("%1").arg(gcChartVersion) << "\",\n";
+    out <<"\t\t\"VIEW\":\"" << property("view").toString()<<"\",\n";
+    out <<"\t\t\"TYPE\":\"" << QString("%1").arg(static_cast<int>(type())) << "\",\n";
+
+    // PROPERTIES
+    out <<"\t\t\"PROPERTIES\":{\n";
+
+    for (int i=0; i<m->propertyCount(); i++) {
+        QMetaProperty p = m->property(i);
+        if (p.isUser(this)) {
+            if (QString(p.typeName()) == "int")      out<<"\t\t\t\""<<p.name()<<"\":\""<<p.read(this).toInt()<<"\",\n";
+            if (QString(p.typeName()) == "double")   out<<"\t\t\t\""<<p.name()<<"\":\""<<p.read(this).toDouble()<<"\",\n";
+            if (QString(p.typeName()) == "QDate")    out<<"\t\t\t\""<<p.name()<<"\":\""<<p.read(this).toDate().toString()<<"\",\n";
+            if (QString(p.typeName()) == "QString")  out<<"\t\t\t\""<<p.name()<<"\":\""<<Utils::jsonprotect(p.read(this).toString())<<"\",\n";
+            if (QString(p.typeName()) == "bool")     out<<"\t\t\t\""<<p.name()<<"\":\""<<p.read(this).toBool()<<"\",\n";
+            if (QString(p.typeName()) == "LTMSettings") {
+                QByteArray marshall;
+                QDataStream s(&marshall, QIODevice::WriteOnly);
+                LTMSettings x = p.read(this).value<LTMSettings>();
+                s << x;
+                out<<"\t\t\t\""<<p.name()<<"\":\""<<marshall.toBase64()<<"\",\n";
+            }
+        }
+    }
+
+    // a last unused property, just to make it well formed json
+    // regardless of how many properties we ever have
+    out <<"\t\t\t\"__LAST__\":\"1\",\n";
+
+    // end here, only one chart
+    out<<"\t\t}\n\t}\n}";
+
+
+}
+
+
+QList<QMap<QString,QString> >
+GcChartWindow::chartPropertiesFromFile(QString filename)
+{
+    QList<QMap<QString,QString> > returning;
+
+    // open the file into a string
+    QString contents;
+    QFile file(filename);
+    if (file.exists() && file.open(QFile::ReadOnly | QFile::Text)) {
+
+        // read in the whole thing
+        QTextStream in(&file);
+        // GC .JSON is stored in UTF-8 with BOM(Byte order mark) for identification
+        in.setCodec ("UTF-8");
+        contents = in.readAll();
+        file.close();
+    }
+
+    // empty?
+    if (contents == "") return returning;
+
+    return chartPropertiesFromString(contents);
+
+}
+
+QList<QMap<QString,QString> >
+GcChartWindow::chartPropertiesFromString(QString contents) {
+
+    QList<QMap<QString,QString> > returning;
+
+    // parse via MVJson to avoid QT5 dependency
+    MVJSONReader json(string(contents.toLatin1()));
+
+    if (json.root && json.root->hasField("CHART")) {
+
+        MVJSONValue *chart = json.root->getField("CHART");
+        if (chart->valueType == MVJSON_TYPE_OBJECT) {
+
+            // ok lets get all the details from it!
+            MVJSONNode *c = chart->objValue;
+            QString type, view;
+            QMap<QString, QString> m;
+
+            // top level - type and view
+            if (c->hasField("TYPE")) type=QString::fromStdString(c->getFieldString("TYPE"));
+            if (c->hasField("VIEW")) view=QString::fromStdString(c->getFieldString("VIEW"));
+            if (type =="" || view=="") return returning;
+
+            m.insert("TYPE", type);
+            m.insert("VIEW", view);
+
+            // run through the properties
+            bool hadproperties;
+            if (c->hasField("PROPERTIES") && c->getField("PROPERTIES")->valueType == MVJSON_TYPE_OBJECT) {
+                MVJSONNode *p = c->getField("PROPERTIES")->objValue;
+
+                // get a vector of the values
+               for (std::vector<MVJSONValue*>::iterator item = p->values.begin() ; item != p->values.end(); ++item) {
+                    QString name = QString::fromStdString((*item)->name);
+                    QString value = QString::fromStdString((*item)->stringValue);
+                    m.insert(name,value);
+                    hadproperties=true;
+               }
+            }
+
+            // if we got something reasonable lets return it
+            if (hadproperties) returning << m;
+        }
+    }
+
+    return returning;
+
+}
+
+
+
+#if GC_HAS_CLOUD_DB
+void
+GcChartWindow::exportChartToCloudDB()
+{
+
+    // check for CloudDB T&C acceptance
+    if (!(appsettings->cvalue(context->athlete->cyclist, GC_CLOUDDB_TC_ACCEPTANCE, false).toBool())) {
+        CloudDBAcceptConditionsDialog acceptDialog(context->athlete->cyclist);
+        acceptDialog.setModal(true);
+        if (acceptDialog.exec() == QDialog::Rejected) {
+            return;
+        };
+    }
+
+    ChartAPIv1 chart;
+    chart.Header.Name = title();
+    int version = VERSION_LATEST;
+    chart.Header.GcVersion =  QString::number(version);
+    // get the gchart - definition json
+    QTextStream out(&chart.ChartDef);
+    out.setCodec ("UTF-8");
+    serializeChartToQTextStream(out);
+    out.flush();
+    // get Type and View from properties
+    QList<QMap<QString,QString> > chartProperties;
+    chartProperties = chartPropertiesFromString(chart.ChartDef);
+    QMap<QString,QString> element;
+    for (int i = 0; i < chartProperties.size(); i++ ) {
+        element = chartProperties.at(i);
+        if (element.contains("TYPE")) {
+            chart.ChartType = element.value("TYPE");
+        }
+        if (element.contains("VIEW")) {
+            chart.ChartView = element.value("VIEW");
+        }
+    }
+
+    QPixmap picture;
+    menuButton->hide();
+    picture = grab(geometry());
+
+    QBuffer buffer(&chart.Image);
+    buffer.open(QIODevice::WriteOnly);
+    picture.save(&buffer, "PNG"); // writes pixmap into bytes in PNG format (a bit larger than JPG - but much better in Quality when importing)
+    buffer.close();
+
+    chart.Header.CreatorId = appsettings->cvalue(context->athlete->cyclist, GC_ATHLETE_ID, "").toString();
+    chart.Header.Curated = false;
+    chart.Header.Deleted = false;
+
+    // now complete the chart with for the user manually added fields
+    CloudDBChartObjectDialog dialog(chart, context->athlete->cyclist);
+    if (dialog.exec() == QDialog::Accepted) {
+        CloudDBChartClient c;
+        if (c.postChart(dialog.getChart())) {
+            CloudDBHeader::setChartHeaderStale(true);
+        }
+    }
+}
+#endif

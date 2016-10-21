@@ -585,7 +585,13 @@ addSensorTypes(ANT *ant, QComboBox *p)
     for (int i=0; ant->ant_sensor_types[i].suffix !=  '\0'; i++) {
         if (ant->ant_sensor_types[i].user) {
             if (*ant->ant_sensor_types[i].iconname != '\0') {
-                p->addItem(QIcon(ant->ant_sensor_types[i].iconname), ant->ant_sensor_types[i].descriptive_name, ant->ant_sensor_types[i].type);
+
+                // we want dark not light
+                QImage img(ant->ant_sensor_types[i].iconname);
+                img.invertPixels();
+                QIcon icon(QPixmap::fromImage(img));
+
+                p->addItem(icon, ant->ant_sensor_types[i].descriptive_name, ant->ant_sensor_types[i].type);
             } else {
                 p->addItem(ant->ant_sensor_types[i].descriptive_name, ant->ant_sensor_types[i].type);
             }
@@ -909,7 +915,7 @@ AddPairBTLE::initializePage()
 
     // defaults
     static const int index4[4] = { 1,2,3,5 };
-    static const int index8[8] = { 1,2,3,4,5,0,0,0 };
+    static const int index8[8] = { 1,2,3,4,5,6,9,10 };
     const int *index = channels == 4 ? index4 : index8;
 
     // how many devices we got then?
@@ -1185,11 +1191,18 @@ AddFinal::AddFinal(AddDeviceWizard *parent) : QWizardPage(parent), wizard(parent
     wheelSizeLayout->addWidget(wheelSizeEdit);
     wheelSizeLayout->addWidget(wheelSizeUnitLabel);
 
+    stridelengthEdit = new QLineEdit(this);
+    stridelengthEdit->setText("115");
+    QHBoxLayout *stridelengthLayout = new QHBoxLayout;
+    stridelengthLayout->addWidget(stridelengthEdit);
+    stridelengthLayout->addStretch();
+
     connect(rimSizeCombo, SIGNAL(currentIndexChanged(int)), this, SLOT(calcWheelSize()));
     connect(tireSizeCombo, SIGNAL(currentIndexChanged(int)), this, SLOT(calcWheelSize()));
     connect(wheelSizeEdit, SIGNAL(textEdited(QString)), this, SLOT(resetWheelSize()));
 
     form2layout->addRow(new QLabel(tr("Wheel Size"), this), wheelSizeLayout);
+    form2layout->addRow(new QLabel(tr("Stride Length (cm)"), this), stridelengthLayout);
 
     hlayout->addLayout(form2layout);
     layout->addStretch();
@@ -1252,6 +1265,7 @@ AddFinal::validatePage()
                                      QString(defKPH->isChecked() ? "S" : "");
         add.postProcess = virtualPower->currentIndex();
         add.wheelSize = wheelSizeEdit->text().toInt();
+        add.stridelength = stridelengthEdit->text().toInt();
 
         QList<DeviceConfiguration> list = all.getList();
         list.insert(0, add);

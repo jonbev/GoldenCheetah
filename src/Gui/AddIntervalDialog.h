@@ -19,6 +19,7 @@
 #ifndef _GC_AddIntervalDialog_h
 #define _GC_AddIntervalDialog_h 1
 #include "GoldenCheetah.h"
+#include "RideFile.h"
 
 #include <QtGui>
 #include <QDialog>
@@ -30,7 +31,6 @@
 #include <QButtonGroup>
 
 class Context;
-class RideFile;
 
 class AddIntervalDialog : public QDialog
 {
@@ -50,10 +50,11 @@ class AddIntervalDialog : public QDialog
 
         AddIntervalDialog(Context *context);
 
-        static void findPeakPowerStandard(const RideFile *ride, QList<AddedInterval> &results);
+        static void findPeakPowerStandard(Context *context, const RideFile *ride, QList<AddedInterval> &results);
 
-        static void findBests(bool typeTime, const RideFile *ride, double windowSizeSecs,
-                              int maxIntervals, QList<AddedInterval> &results, QString name);
+        static void findPeaks(Context *context, bool typeTime, const RideFile *ride, RideFile::SeriesType series,
+                              RideFile::Conversion conversion, double windowSizeSecs,
+                              int maxIntervals, QList<AddedInterval> &results, QString prefixe, QString overideName);
 
         static void findFirsts(bool typeTime, const RideFile *ride, double windowSizeSecs,
                                int maxIntervals, QList<AddedInterval> &results);
@@ -63,13 +64,17 @@ class AddIntervalDialog : public QDialog
         void addClicked(); // add to inverval selections
 
         void methodFirstClicked();
-        void methodBestPowerClicked();
+        void methodPeakPowerClicked();
         void methodWPrimeClicked();
         void methodClimbClicked();
+        void methodHeartRateClicked();
+        void methodPeakPaceClicked();
+        void methodPeakSpeedClicked();
         void peakPowerStandardClicked();
         void peakPowerCustomClicked();
         void typeTimeClicked();
         void typeDistanceClicked();
+
 
     private:
 
@@ -82,7 +87,8 @@ class AddIntervalDialog : public QDialog
         QPushButton *createButton, *addButton;
         QDoubleSpinBox *hrsSpinBox, *minsSpinBox, *secsSpinBox, *altSpinBox,
                        *countSpinBox,*kmsSpinBox, *msSpinBox, *kjSpinBox;
-        QRadioButton *methodFirst, *methodBestPower, *methodWPrime, *methodClimb;
+        QRadioButton *methodFirst, *methodPeakPower, *methodWPrime, *methodClimb, *methodHeartRate,
+                     *methodPeakSpeed, *methodPeakPace;
         QRadioButton *typeDistance, *typeTime, *peakPowerStandard, *peakPowerCustom;
         QTableWidget *resultsTable;
 };

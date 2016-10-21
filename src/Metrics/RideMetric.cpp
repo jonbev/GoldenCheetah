@@ -135,8 +135,9 @@
 // 125 08  Dec 2015 Ale Martinez       Support metrics in Calendar Text
 // 126 08  Mar 2016 Mark Liversedge    Added count of To Exhaustions
 // 127 25  Mar 2016 Mark Liversedge    Best R metric for Exhaustion Points
+// 128 15  May 2016 Mark Liversedge    Add ActivityCRC so R scripts can use when caching
 
-int DBSchemaVersion = 127;
+int DBSchemaVersion = 128;
 
 RideMetricFactory *RideMetricFactory::_instance;
 QVector<QString> RideMetricFactory::noDeps;
@@ -165,10 +166,17 @@ RideMetric::computeMetrics(RideItem *item, Specification spec, const QStringList
     // generate worklist from metrics we know
     // bear in mind this can change as users add
     // and remove user metrics
-    QStringList todo;
+    // builtin User metrics are computed after builtins
+    // since they don't have explicit dependencies set, yet.
+    QStringList builtin;
+    QStringList user;
     foreach(QString metric, metrics)
-        if (factory.haveMetric(metric))
-            todo << metric;
+        if (factory.haveMetric(metric)) {
+            if (factory.rideMetric(metric)->isUser())
+                user << metric;
+            else
+                builtin << metric;
+        }
 
     // this is what we've completed as we go
     QHash<QString,RideMetric*> done;
@@ -182,10 +190,11 @@ RideMetric::computeMetrics(RideItem *item, Specification spec, const QStringList
         item->metrics().resize(factory.metricCount());
 
     // working through the todo list...
-    while (!todo.isEmpty()) {
+    while (!builtin.isEmpty() || !user.isEmpty()) {
 
-        // next one to do
-        QString symbol = todo.takeFirst();
+        // next one to do, builtins first then user defined
+        QString symbol = builtin.isEmpty() ? user.takeFirst() :
+                                             builtin.takeFirst();
 
         // doesn't exist !
         if (!factory.haveMetric(symbol)) continue;
@@ -199,8 +208,8 @@ RideMetric::computeMetrics(RideItem *item, Specification spec, const QStringList
         foreach (QString dep, deps) {
             if (!done.contains(dep)) {
                 ready = false;
-                if (!todo.contains(dep))
-                    todo.append(dep);
+                if (!builtin.contains(dep))
+                    builtin.append(dep);
             }
         }
 
@@ -231,8 +240,8 @@ RideMetric::computeMetrics(RideItem *item, Specification spec, const QStringList
 
             // we need to wait for our dependencies so add
             // to the back of the list 
-            if (!todo.contains(symbol))
-                todo.append(symbol);
+            if (!builtin.contains(symbol))
+                builtin.append(symbol);
         }
     }
 

@@ -238,33 +238,16 @@ contains(DEFINES, "GC_WANT_R") {
     isEmpty(R_HOME){ R_HOME = $$system(R RHOME) }
 
     ## include headers and libraries for R
-    win32 {
+    win32  { QMAKE_CXXFLAGS += -I$$R_HOME/include
+             DEFINES += Win32 }
+    else   { QMAKE_CXXFLAGS += $$system($$R_HOME/bin/R CMD config --cppflags) }
 
-        ##  only on 64 bit for now (needs fixup for 32 bit)
-        LIBS += $$R_HOME/bin/x64/R.lib
-        RCPPFLAGS = -I$$R_HOME/include
-
-    } else {
-
-        RCPPFLAGS =             $$system($$R_HOME/bin/R CMD config --cppflags)
-        RLDFLAGS =              $$system($$R_HOME/bin/R CMD config --ldflags)
-        RBLAS =                 $$system($$R_HOME/bin/R CMD config BLAS_LIBS)
-        RLAPACK =               $$system($$R_HOME/bin/R CMD config LAPACK_LIBS)
-        LIBS +=         		$$RLDFLAGS $$RBLAS $$RLAPACK
-    }
-
-    ## compiler etc settings used in default make rules
-    QMAKE_CXXFLAGS +=       $$RCPPWARNING $$RCPPFLAGS
-
-    ## R has lots of compatibility headers for S and legacy R code
-    ## we don't want that -- our code is shiny and new.
-    ## Plus it tends to break lots of things anyway.
-    win32 { DEFINES += Win32 }
+    ## R has lots of compatibility headers for S and legacy R code we don't want
     DEFINES += STRICT_R_HEADERS
 
     ## R integration
-    HEADERS += R/REmbed.h R/RTool.h R/RGraphicsDevice.h R/RSyntax.h
-    SOURCES += R/REmbed.cpp R/RTool.cpp R/RGraphicsDevice.cpp R/RSyntax.cpp
+    HEADERS += R/REmbed.h R/RTool.h R/RGraphicsDevice.h R/RSyntax.h R/RLibrary.h
+    SOURCES += R/REmbed.cpp R/RTool.cpp R/RGraphicsDevice.cpp R/RSyntax.cpp R/RLibrary.cpp
 
     ## R based charts
     HEADERS += Charts/RChart.h Charts/RCanvas.h
@@ -599,8 +582,8 @@ greaterThan(QT_MAJOR_VERSION, 4) {
     SOURCES += Train/Kettler.cpp Train/KettlerController.cpp Train/KettlerConnection.cpp
     HEADERS += Train/Kettler.h Train/KettlerController.h Train/KettlerConnection.h
 
-    # bluetooth in QT5.4 or higher
-    greaterThan(QT_MINOR_VERSION, 3) {
+    # bluetooth in QT5.5 or higher(5.4 was only a tech preview)
+    greaterThan(QT_MINOR_VERSION, 4) {
         QT += bluetooth
         HEADERS += Train/BT40Controller.h Train/BT40Device.h
         SOURCES += Train/BT40Controller.cpp Train/BT40Device.cpp
@@ -741,7 +724,7 @@ SOURCES += Core/Athlete.cpp Core/Context.cpp Core/DataFilter.cpp Core/FreeSearch
 SOURCES += FileIO/AthleteBackup.cpp FileIO/Bin2RideFile.cpp FileIO/BinRideFile.cpp FileIO/CommPort.cpp \
            FileIO/Computrainer3dpFile.cpp FileIO/CsvRideFile.cpp FileIO/DataProcessor.cpp FileIO/Device.cpp \
            FileIO/FitlogParser.cpp FileIO/FitlogRideFile.cpp FileIO/FitRideFile.cpp FileIO/FixDeriveDistance.cpp FileIO/FixDerivePower.cpp \
-           FileIO/FixDeriveTorque.cpp FileIO/FixElevation.cpp FileIO/FixFreewheeling.cpp FileIO/FixGaps.cpp FileIO/FixGPS.cpp \
+           FileIO/FixDeriveTorque.cpp FileIO/FixElevation.cpp FileIO/FixFreewheeling.cpp FileIO/FixGaps.cpp FileIO/FixGPS.cpp FileIO/FixRunningPower.cpp \
            FileIO/FixHRSpikes.cpp FileIO/FixMoxy.cpp FileIO/FixPower.cpp FileIO/FixSmO2.cpp FileIO/FixSpeed.cpp FileIO/FixSpikes.cpp \
            FileIO/FixTorque.cpp FileIO/GcRideFile.cpp FileIO/GpxParser.cpp FileIO/GpxRideFile.cpp FileIO/JouleDevice.cpp FileIO/LapsEditor.cpp \
            FileIO/MacroDevice.cpp FileIO/ManualRideFile.cpp FileIO/MoxyDevice.cpp \

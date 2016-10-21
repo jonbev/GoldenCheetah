@@ -23,22 +23,35 @@
 #define R_NO_REMAP // don't map length(x) -> Rf_length for older code base
 #include <R.h>
 #include <Rinternals.h>
+#include "Rversion.h"
+
+// message i/o from to R
+#ifndef WIN32
+#define R_INTERFACE_PTRS
+#include <Rinterface.h>
+#endif
 
 // specific to embedding
 #include <Rembedded.h>
 #include <R_ext/Parse.h>
 #include <R_ext/Rdynload.h>
 #include <R_ext/RStartup.h>
+#include <R_ext/Error.h>
 
-// names clash between R and Win8.1 Kit
-//#ifdef WIN32
-//#undef ERROR
-//#undef Realloc
-//#undef Free
-//#endif
+#include <R_ext/Boolean.h>
+#include "R_ext/GraphicsEngine.h"
+#include "R_ext/GraphicsDevice.h"
+
+// remap
+#include "RLibrary.h"
 
 #include <QString>
 #include <QStringList>
+
+// no setenv on Windows
+#ifdef WIN32
+extern int setenv(QString name,  QString value, bool overwrite);
+#endif
 
 // a plain C++ class, no QObject stuff
 class REmbed {

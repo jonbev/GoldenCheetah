@@ -292,7 +292,6 @@ void ANTChannel::sendCinqoSuccess() {}
 //
 void ANTChannel::broadcastEvent(unsigned char *ant_message)
 {
-    //qDebug()<<number<<"broadcast event !";
     ANTMessage antMessage(parent, ant_message);
     bool savemessage = true; // flag to stop lastmessage being
                              // overwritten for standard power
@@ -814,6 +813,61 @@ void ANTChannel::broadcastEvent(unsigned char *ant_message)
                }
                break;
            }
+
+            case CHANNEL_TYPE_FOOTPOD:
+            {
+                static int fpCount=0;
+                static double fpMS=0;
+                static double fpStrides=0;
+
+                // just process strides for now
+                if (antMessage.fpodInstant == false) {
+
+                    QTime now=QTime::currentTime();
+                    int ms = lastMessageTimestamp.msecsTo(now);
+                    lastMessageTimestamp = now;
+
+                    // how many strides since last ?
+                    uint8_t strides = antMessage.fpodStrides - lastMessage.fpodStrides;
+
+                    fpCount++;
+                    fpMS += ms;
+                    fpStrides += strides;
+
+                    // if we set speed and cadence distance and time is done for us.
+                    if (fpCount==4) {
+
+                        // default or get config
+                        double STRIDELENGTH=115; // 1.15m seems to be a common L2 pace stride length (?)
+                        if (parent->devConf) STRIDELENGTH=parent->devConf->stridelength;
+
+                        // convert to meters
+                        STRIDELENGTH /= 100;
+
+                        // calculate new cadence and speed
+
+                        // running cadence is per cycle; i.e. a left and right step
+                        // so if you take 100 footsteps a minute (50 left, 50 right) then
+                        // your running cadence will be 50, not 100.
+                        parent->setCadence(fpStrides * (60/(fpMS/1000.00f)));
+
+                        // running speed is strides x 2 (for left and right) multiplied
+                        // by the user defined stride length, which is typicall ~78cm
+                        parent->setSpeed((fpStrides*2*STRIDELENGTH) / (fpMS/1000.00f) * 3.6f);
+
+                        // reset counters
+                        fpCount=0;
+                        fpStrides=0;
+                        fpMS=0;
+                    }
+
+                } else {
+
+                    // don't save instantaneous
+                    savemessage = false;
+                }
+            }
+            break;
 
             // Tacx Vortex trainer
             case CHANNEL_TYPE_TACX_VORTEX:

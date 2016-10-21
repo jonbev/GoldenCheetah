@@ -38,19 +38,36 @@ class RTool {
         // the canvas to plot on, it may be null
         // if no canvas is active
         RCanvas *canvas;
+        RChart *chart;
 
         Context *context;
         QString version;
 
+        static SEXP pageSize(SEXP width, SEXP height);
+
+        // athlete
         static SEXP athlete();
-        static SEXP athleteHome();
-        static SEXP activities();
-        static SEXP activity(SEXP all);
-        static SEXP metrics(SEXP all, SEXP compare);
+        static SEXP zones(SEXP date, SEXP sport);
+
+        // activities
+        static SEXP activities(SEXP filter);
+        static SEXP activity(SEXP datetime, SEXP compare, SEXP split);
+        static SEXP activityMeanmax(SEXP compare);
+        static SEXP activityWBal(SEXP compare);
+        static SEXP activityMetrics(SEXP compare);
+
+        // seasons
+        static SEXP season(SEXP all, SEXP compare);
+        static SEXP metrics(SEXP all, SEXP filter, SEXP compare);
+        static SEXP seasonMeanmax(SEXP all, SEXP filter, SEXP compare);
+        static SEXP seasonPeaks(SEXP all, SEXP filter, SEXP compare, SEXP series, SEXP duration);
         static SEXP pmc(SEXP all, SEXP metric);
 
         bool starting;
         bool failed;
+        bool cancelled;
+
+        int width, height;
 
         // handling console output from the R runtime
         static void R_Suicide(const char *) {}
@@ -64,17 +81,27 @@ class RTool {
         static void R_ResetConsole() { }
         static void R_FlushConsole() { }
         static void R_ClearerrConsole() { }
+        static void R_ProcessEvents();
         static void R_Busy(int) { }
-        static void R_Callback() { }
         static int  R_YesNoCancel(const char *) { return 0; }
+        static void cancel();
 
         QStringList messages;
+
 
     protected:
 
         // return a dataframe for the ride passed
-        SEXP dfForActivity(RideFile *f);
-        SEXP dfForDateRange(bool all, DateRange range);
+        QList<RideItem *> activitiesFor(SEXP datetime);   // find the rideitem requested by the user
+        QList<SEXP> dfForActivity(RideFile *f, int split);                // returns date series for an activity
+        SEXP dfForActivityWBal(RideFile *f);            // returns w' bal series for an activity
+        SEXP dfForActivityMeanmax(const RideItem *i);   // returns mean maximals for an activity
+        SEXP dfForRideItem(const RideItem *i);          // returns metrics and meradata for an activity
+        SEXP dfForDateRange(bool all, DateRange range, SEXP filter); // returns metrics and metadata for a season
+        SEXP dfForDateRangeMeanmax(bool all, DateRange range, SEXP filter); // returns the meanmax for a season
+        SEXP dfForDateRangePeaks(bool all, DateRange range, SEXP filter, QList<RideFile::SeriesType> series, QList<int> durations);
+        SEXP dfForRideFileCache(RideFileCache *p);      // returns meanmax for a cache
+
 };
 
 // there is a global instance created in main

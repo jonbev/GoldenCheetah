@@ -661,6 +661,24 @@ RideFileCache::meanMaxDates(RideFile::SeriesType series)
     }
 }
 
+QList<RideFile::SeriesType> RideFileCache::meanMaxList()
+{
+        QList<RideFile::SeriesType> list;
+        list << RideFile::watts
+             << RideFile::wattsKg
+             << RideFile::nm
+             << RideFile::hr
+             << RideFile::cad
+             << RideFile::kph
+             << RideFile::vam
+             << RideFile::NP
+             << RideFile::aPower
+             << RideFile::xPower
+             ;
+
+    return list;
+}
+
 QVector<double> &
 RideFileCache::meanMaxArray(RideFile::SeriesType series)
 {
@@ -1390,6 +1408,11 @@ MeanMaxComputer::run()
     // future if some fancy new algorithm arrives
     //
 
+    // XXX seems we can end up with 0 at the end ?
+    // XXX don't know why, so, for now, just clean that
+    while (ride_bests.size() && ride_bests[ride_bests.size()-1] == 0)
+        ride_bests.resize(ride_bests.size()-1);
+
     double last = 0;
 
     // only care about first 3 minutes MAX for delta series
@@ -1401,13 +1424,16 @@ MeanMaxComputer::run()
         array.resize(ride_bests.count());
     }
 
-    for (int i=ride_bests.size()-1; i; i--) {
-        if (ride_bests[i] == 0) ride_bests[i]=last;
-        else last = ride_bests[i];
+    // bounds check, it might be empty!
+    if (ride_bests.size()) {
+        for (int i=ride_bests.size()-1; i; i--) {
+            if (ride_bests[i] == 0) ride_bests[i]=last;
+            else last = ride_bests[i];
 
-        // convert from double to long, preserving the
-        // precision by applying a multiplier
-        array[i] = ride_bests[i]; // * decimals; -- we did that earlier
+            // convert from double to long, preserving the
+            // precision by applying a multiplier
+            array[i] = ride_bests[i]; // * decimals; -- we did that earlier
+        }
     }
 }
 
@@ -1491,7 +1517,7 @@ RideFileCache::computeDistribution(QVector<float> &array, RideFile::SeriesType s
 
     // get zones that apply, if any
     int zoneRange = context->athlete->zones(ride->isRun()) ? context->athlete->zones(ride->isRun())->whichRange(ride->startTime().date()) : -1;
-    int hrZoneRange = context->athlete->hrZones() ? context->athlete->hrZones()->whichRange(ride->startTime().date()) : -1;
+    int hrZoneRange = context->athlete->hrZones(ride->isRun()) ? context->athlete->hrZones(ride->isRun())->whichRange(ride->startTime().date()) : -1;
     int paceZoneRange = context->athlete->paceZones(ride->isSwim()) ? context->athlete->paceZones(ride->isSwim())->whichRange(ride->startTime().date()) : -1;
 
     if (zoneRange != -1) CP=context->athlete->zones(ride->isRun())->getCP(zoneRange);
@@ -1500,7 +1526,7 @@ RideFileCache::computeDistribution(QVector<float> &array, RideFile::SeriesType s
     if (zoneRange != -1) WPRIME=context->athlete->zones(ride->isRun())->getWprime(zoneRange);
     else WPRIME=0;
 
-    if (hrZoneRange != -1) LTHR=context->athlete->hrZones()->getLT(hrZoneRange);
+    if (hrZoneRange != -1) LTHR=context->athlete->hrZones(ride->isRun())->getLT(hrZoneRange);
     else LTHR=0;
 
     if (paceZoneRange != -1) CV=context->athlete->paceZones(ride->isSwim())->getCV(paceZoneRange);
@@ -1574,7 +1600,7 @@ RideFileCache::computeDistribution(QVector<float> &array, RideFile::SeriesType s
 
             // hr time in zone
             if (series == RideFile::hr && hrZoneRange != -1) {
-                int index = context->athlete->hrZones()->whichZone(hrZoneRange, dp->value(series));
+                int index = context->athlete->hrZones(ride->isRun())->whichZone(hrZoneRange, dp->value(series));
                 if (index >= 0) hrTimeInZone[index] += ride->recIntSecs();
             }
 
