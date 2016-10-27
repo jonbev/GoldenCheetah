@@ -981,6 +981,9 @@ LTMPlot::setData(LTMSettings *set)
                             labelString = (QString("%1").arg(value, 0, 'f', 1));
                         }
 
+                        // Format minutes in sexagesimal format
+                        if (isMinutes(metricDetail.uunits))
+                            labelString = time_to_string(value*60, true);
 
                         // Qwt uses its own text objects
                         QwtText text(labelString);
@@ -1144,6 +1147,10 @@ LTMPlot::setData(LTMSettings *set)
                         // no precision
                         labelString = (QString("%1").arg(value, 0, 'f', 1));
                     }
+
+                    // Format minutes in sexagesimal format
+                    if (isMinutes(metricDetail.uunits))
+                        labelString = time_to_string(value*60, true);
 
 
                     // Qwt uses its own text objects
@@ -2086,6 +2093,10 @@ LTMPlot::setCompareData(LTMSettings *set)
                                 labelString = (QString("%1").arg(value, 0, 'f', 1));
                             }
 
+                            // Format minutes in sexagesimal format
+                            if (isMinutes(metricDetail.uunits))
+                                labelString = time_to_string(value*60, true);
+
 
                             // Qwt uses its own text objects
                             QwtText text(labelString);
@@ -2248,6 +2259,10 @@ LTMPlot::setCompareData(LTMSettings *set)
                             // no precision
                             labelString = (QString("%1").arg(value, 0, 'f', 1));
                         }
+
+                        // Format minutes in sexagesimal format
+                        if (isMinutes(metricDetail.uunits))
+                            labelString = time_to_string(value*60, true);
 
 
                         // Qwt uses its own text objects
@@ -3554,18 +3569,27 @@ LTMPlot::pointHover(QwtPlotCurve *curve, int index)
             precision = 1; // need more precision now
         }
 
+
+        // convert minutes to time string for pace, otherwise use precision
+        QString txtValue;
+        if (isMinutes(units) || isMinutes(this->axisTitle(curve->yAxis()).text())) {
+            txtValue = QString("%1").arg(time_to_string(value*60.0, true));
+        } else {
+            txtValue = QString("%1").arg(value, 0, 'f', precision);
+        }
+
         // output the tooltip
         QString text;
         if (!parent->isCompare()) {
             text = QString("%1\n%2\n%3 %4")
                         .arg(datestr)
                         .arg(curve->title().text())
-                        .arg(value, 0, 'f', precision)
+                        .arg(txtValue)
                         .arg(this->axisTitle(curve->yAxis()).text());
         } else {
             text = QString("%1\n%2 %3")
                         .arg(curve->title().text())
-                        .arg(value, 0, 'f', precision)
+                        .arg(txtValue)
                         .arg(this->axisTitle(curve->yAxis()).text());
         }
 
@@ -3852,4 +3876,9 @@ void LTMPlot::refreshZoneLabels(QwtAxisId axisid)
     }
     bg = new LTMPlotBackground(this, axisid);
     bg->attach(this);
+}
+
+bool LTMPlot::isMinutes(QString units)
+{
+    return units == "minutes" || units == tr("minutes") || PaceZones::isPaceUnit(units);
 }

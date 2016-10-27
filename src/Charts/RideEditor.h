@@ -29,6 +29,8 @@
 #include <QtGui>
 #include <QGroupBox>
 #include <QCheckBox>
+#include <QSize>
+#include <QTabBar>
 #include <QTableView>
 #include <QTableWidget>
 #include <QHeaderView>
@@ -36,13 +38,19 @@
 #include <QDesktopWidget>
 #include <QToolBar>
 #include <QItemDelegate>
+#include <QStackedWidget>
 
 class EditorData;
 class CellDelegate;
+class XDataCellDelegate;
 class RideModel;
 class FindDialog;
 class AnomalyDialog;
+class XDataDialog;
 class PasteSpecialDialog;
+class EditorTabBar;
+class XDataEditor;
+class XDataTableModel;
 
 class RideEditor : public GcChartWindow
 {
@@ -89,6 +97,7 @@ class RideEditor : public GcChartWindow
         void redo();
         void find();
         void anomalies();
+        void xdata();
 
         // anomaly list
         void anomalySelected();
@@ -120,13 +129,16 @@ class RideEditor : public GcChartWindow
         // GC signals
         void configChanged(qint32);
         void rideSelected();
+        void setTabBar(bool force);
+        void tabbarSelected(int);
+        void removeTabRequested(int);
         void intervalSelected();
         void rideDirty();
         void rideClean();
 
         // util
-        void getPaste(QVector<QVector<double> >&cells,
-                      QStringList &seps, QStringList &head, bool);
+        /*void getPaste(QVector<QVector<double> >&cells,
+                      QStringList &seps, QStringList &head, bool);*/
 
     protected:
         EditorData *data;
@@ -135,6 +147,9 @@ class RideEditor : public GcChartWindow
         QStringList copyHeadings;
         FindDialog *findTool;
         AnomalyDialog *anomalyTool;
+        XDataDialog *xdataTool;
+
+        QMap<QString,XDataEditor*> xdataEditors;
 
     private:
         Context *context;
@@ -145,9 +160,13 @@ class RideEditor : public GcChartWindow
         QList<QString> whatColumns();
         QSignalMapper *colMapper;
 
+        QStackedWidget *stack;
+        QList<QWidget*> xdataViews;
+        EditorTabBar *tabbar;
+
         QToolBar *toolbar;
         QAction *saveAct, *undoAct, *redoAct,
-                *searchAct, *checkAct;
+                *searchAct, *checkAct, *xdataAct;
 
         // state data
         struct { int row, column; } currentCell;
@@ -204,6 +223,40 @@ private slots:
 
 private:
     RideEditor *rideEditor;
+
+};
+
+class XDataCellDelegate : public QItemDelegate
+{
+    Q_OBJECT
+    G_OBJECT
+
+
+public:
+    XDataCellDelegate(XDataEditor *, QObject *parent = 0);
+
+    // setup editor in the cell - QDoubleSpinBox
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option, const QModelIndex &index) const;
+
+    // Fetch data from model ready for editing
+    void setEditorData(QWidget *editor, const QModelIndex &index) const;
+
+    // Save data back to model after editing
+    void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const;
+
+    // override stanard painter to underline anomalies in red
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const;
+
+    void updateEditorGeometry(QWidget *editor,
+                              const QStyleOptionViewItem &option,
+                              const QModelIndex &index) const;
+
+private slots:
+
+    void commitAndCloseEditor();
+
+private:
+    XDataEditor *xdataEditor;
 
 };
 
@@ -328,4 +381,56 @@ class PasteSpecialDialog : public QDialog
 
         QPushButton *okButton, *cancelButton;
 };
+
+class EditorTabBar : public QTabBar
+{
+    public:
+        EditorTabBar(QWidget *p) : QTabBar(p) {}
+
+    protected:
+        virtual QSize tabSizeHint(int index) const;
+};
+
+class XDataEditor : public QTableView
+{
+    Q_OBJECT
+
+    friend class ::XDataCellDelegate;
+
+    public:
+        XDataEditor(QWidget *parent, QString xdata);
+        void setRideItem(RideItem*);
+        void selectIntervals(QList<IntervalItem*> intervals);
+
+    public slots:
+        void configChanged();
+        bool eventFilter(QObject *, QEvent *);
+
+        // add/del rows and columns
+        void borderMenu(const QPoint &pos);
+        void insCol();
+        void delCol();
+        void insRow();
+        void appRow();
+        void appRows(int count);
+        void delRow();
+        void copy();
+        void cut();
+        void paste();
+
+    protected:
+        QString xdata;
+        XDataTableModel *_model;
+        int currentRow, currentColumn;
+
+        bool isRowSelected();
+        bool isColumnSelected();
+
+        void setModelValue(int row, int column, double value);
+
+        // util
+        //void getPaste(QVector<QVector<double> >&cells,
+        //              QStringList &seps, QStringList &head, bool);
+};
+
 #endif // _GC_RideEditor_h

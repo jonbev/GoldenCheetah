@@ -512,6 +512,7 @@ AllPlotObject::setUserData(QList<UserData*>user)
         add.name = userdata->name;
         add.units = userdata->units;
         add.curve = new QwtPlotGappedCurve(userdata->name, 3);
+        //add.curve->setNAValue(RideFile::NA);
         add.curve->setPaintAttribute(QwtPlotCurve::FilterPoints, true);
         add.curve->setYAxis(QwtAxisId(QwtAxis::yRight, 4 + k)); // for now.
         add.curve->attach(plot);
@@ -5451,7 +5452,7 @@ AllPlot::setDataFromRideFile(RideFile *ride, AllPlotObject *here, QList<UserData
         here->rpppeArray.resize(dataPresent->rpppe ? npoints : 0);
         here->timeArray.resize(npoints);
         here->distanceArray.resize(npoints);
-        for(int k=0; k<user.count(); k++) here->U[k].array.resize(npoints);
+        for(int k=0; k<here->U.count(); k++) here->U[k].array.resize(npoints);
 
         // attach appropriate curves
         here->wCurve->detach();
@@ -5625,7 +5626,9 @@ AllPlot::setDataFromRideFile(RideFile *ride, AllPlotObject *here, QList<UserData
 
             here->timeArray[arrayLength]  = secs + msecs/1000;
 
-            for(int k=0; k<user.count(); k++) here->U[k].array[arrayLength] = user[k]->vector[arrayLength];
+            for(int k=0; k<here->U.count() && k<user.count(); k++) {
+                here->U[k].array[arrayLength] = user[k]->vector[arrayLength];
+            }
             if (!here->wattsArray.empty()) here->wattsArray[arrayLength] = max(0, point->watts);
             if (!here->atissArray.empty()) here->atissArray[arrayLength] = max(0, point->atiss);
             if (!here->antissArray.empty()) here->antissArray[arrayLength] = max(0, point->antiss);
@@ -5665,7 +5668,8 @@ AllPlot::setDataFromRideFile(RideFile *ride, AllPlotObject *here, QList<UserData
             if (!here->slopeArray.empty()) here->slopeArray[arrayLength] = point->slope;
 
             if (!here->tempArray.empty())
-                here->tempArray[arrayLength]   = point->temp;
+                here->tempArray[arrayLength]   = context->athlete->useMetricUnits ? point->temp
+                                                 : point->temp * FAHRENHEIT_PER_CENTIGRADE + FAHRENHEIT_ADD_CENTIGRADE;
 
             if (!here->windArray.empty())
                 here->windArray[arrayLength] = max(0,
@@ -5959,6 +5963,7 @@ AllPlot::setShow(RideFile::SeriesType type, bool state)
         setShowGear(state);
         break;
     case RideFile::wbal:
+    case RideFile::index:
         break;
     }
 }

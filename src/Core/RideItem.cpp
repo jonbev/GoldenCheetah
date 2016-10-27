@@ -29,7 +29,7 @@
 #include "PaceZones.h"
 #include "Settings.h"
 #include "Colors.h" // for ColorEngine
-#include "BestIntervalDialog.h" // till we fixup ridefilecache to have offsets
+#include "AddIntervalDialog.h" // till we fixup ridefilecache to have offsets
 #include "TimeUtils.h" // time_to_string()
 #include "WPrime.h" // for matches
 
@@ -84,7 +84,8 @@ RideItem::setFrom(RideItem&here, bool temp) // used when loading cache/rideDB.js
     fileCache_ = NULL;
     metrics_ = here.metrics_;
 	metadata_ = here.metadata_;
-	errors_ = here.errors_;
+    xdata_ = here.xdata_;
+    errors_ = here.errors_;
     intervals_ = here.intervals_;
 
     // don't update the interval pointers if this is a 
@@ -542,6 +543,16 @@ RideItem::refresh()
         // get the metadata
         metadata_ = f->tags();
 
+        // get xdata definitions
+        QMapIterator<QString, XDataSeries *>ie(f->xdata());
+        ie.toFront();
+        while(ie.hasNext()) {
+            ie.next();
+
+            // xdata and series names
+            xdata_.insert(ie.value()->name, ie.value()->valuename);
+        }
+
         // overrides
         overrides_.clear();
         QMap<QString,QMap<QString, QString> >::const_iterator k;
@@ -844,8 +855,8 @@ RideItem::updateIntervals()
         for(int i=0; durations[i] != 0; i++) {
 
             // go hunting for best peak
-            QList<BestIntervalDialog::BestInterval> results;
-            BestIntervalDialog::findBests(f, Specification(), durations[i], 1, results);
+            QList<AddIntervalDialog::AddedInterval> results;
+            AddIntervalDialog::findPeaks(context, true, f, Specification(), RideFile::watts, RideFile::original, durations[i], 1, results, "", "");
 
             // did we get one ?
             if (results.count() > 0 && results[0].avg > 0 && results[0].stop > 0) {
@@ -878,8 +889,8 @@ RideItem::updateIntervals()
         for(int i=0; durations[i] != 0; i++) {
 
             // go hunting for best peak
-            QList<BestIntervalDialog::BestInterval> results;
-            BestIntervalDialog::findBestsKPH(f, Specification(), durations[i], 1, results);
+            QList<AddIntervalDialog::AddedInterval> results;
+            AddIntervalDialog::findPeaks(context, true, f, Specification(), RideFile::kph, RideFile::original, durations[i], 1, results, "", "");
 
             // did we get one ?
             if (results.count() > 0 && results[0].avg > 0 && results[0].stop > 0) {
@@ -1457,4 +1468,33 @@ QList<IntervalItem*> RideItem::intervals(RideFileInterval::intervaltype type) co
         if (p && p->type == type) returning << p;
     }
     return returning;
+}
+
+// search through the xdata and match against wildcards passed
+// if found return true and set mname and mseries to what matched
+// otherwise return false
+bool
+RideItem::xdataMatch(QString name, QString series, QString &mname, QString &mseries)
+{
+    QMapIterator<QString, QStringList>xi(xdata_);
+    xi.toFront();
+    while (xi.hasNext()) {
+        xi.next();
+
+        if (QDir::match(name, xi.key())) {
+
+            // name matches
+            foreach(QString s, xi.value()) {
+
+                if (QDir::match(series, s)) {
+
+                    // series matches too
+                    mname = xi.key();
+                    mseries = s;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }

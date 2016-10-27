@@ -24,6 +24,7 @@
 #include "RideFileCache.h"
 #include "PMCData.h"
 #include "VDOTCalculator.h"
+#include "DataProcessor.h"
 #include <QDebug>
 
 #include "Zones.h"
@@ -96,10 +97,23 @@ static struct {
     { "unset", 2 }, // unset(symbol, filter)
     { "isset", 1 }, // isset(symbol) - is the metric or metadata overridden/defined
 
-    // VDOT functions
+    // VDOT and time/distance functions
     { "vdottime", 2 }, // vdottime(VDOT, distance[km]) - result is seconds
+    { "besttime", 1 }, // besttime(distance[km]) - result is seconds
+
+    // XDATA access
+    { "XDATA", 3 },     // e.g. xdata("WEATHER","HUMIDITY", repeat|sparse|interpolate |resample)
+
+    // print to qDebug for debugging
+    { "print", 1 },     // print(..) to qDebug for debugging
+
+    // Data Processor functions on filtered activiies
+    { "autoprocess", 1 }, // autoprocess(filter) to run auto data processors
+    { "postprocess", 2 }, // postprocess(processor, filter) to run processor
 
     // add new ones above this line
+    { "XDATA_UNITS", 2 }, // e.g. xdata("WEATHER", "HUMIDITY") returns "Relative Humidity"
+
     { "", -1 }
 };
 
@@ -134,6 +148,10 @@ DataFilter::builtins()
 
         } else if (i == 32) { // set example
             returning <<"set(field, value, expr)";
+        } else if (i == 37) {
+            returning << "XDATA(\"xdata\", \"series\", sparse|repeat|interpolate|resample)";
+        } else if (i == 41) {
+            returning << "XDATA_UNITS(\"xdata\", \"series\")";
         } else {
             function = DataFilterFunctions[i].name + "(";
             for(int j=0; j<DataFilterFunctions[i].parameters; j++) {
@@ -823,7 +841,7 @@ Leaf::toString()
     return "";
 }
 
-void Leaf::print(Leaf *leaf, int level)
+void Leaf::print(Leaf *leaf, int level, DataFilterRuntime *df)
 {
     qDebug()<<"LEVEL"<<level;
     if (leaf == NULL) {
@@ -833,54 +851,59 @@ void Leaf::print(Leaf *leaf, int level)
     switch(leaf->type) {
     case Leaf::Compound: 
                         qDebug()<<"{";
-                        foreach(Leaf *p, *(leaf->lvalue.b)) print(p, level+1);
+                        foreach(Leaf *p, *(leaf->lvalue.b)) print(p, level+1, df);
                         qDebug()<<"}";
                         break;
 
     case Leaf::Float : qDebug()<<"float"<<leaf->lvalue.f<<leaf->dynamic; break;
     case Leaf::Integer : qDebug()<<"integer"<<leaf->lvalue.i<<leaf->dynamic; break;
     case Leaf::String : qDebug()<<"string"<<*leaf->lvalue.s<<leaf->dynamic; break;
-    case Leaf::Symbol : qDebug()<<"symbol"<<*leaf->lvalue.n<<leaf->dynamic; break;
+    case Leaf::Symbol : {
+                            double value=0;
+                            if (df) value=df->symbols.value(*leaf->lvalue.n).number;
+                            qDebug()<<"symbol"<<*leaf->lvalue.n<<leaf->dynamic<<value;
+                        }
+                        break;
     case Leaf::Logical  : qDebug()<<"lop"<<leaf->op;
-                    leaf->print(leaf->lvalue.l, level+1);
+                    leaf->print(leaf->lvalue.l, level+1, df);
                     if (leaf->op) // nonzero ?
-                    leaf->print(leaf->rvalue.l, level+1);
+                    leaf->print(leaf->rvalue.l, level+1, df);
                     break;
     case Leaf::Operation : qDebug()<<"cop"<<leaf->op;
-                    leaf->print(leaf->lvalue.l, level+1);
-                    leaf->print(leaf->rvalue.l, level+1);
+                    leaf->print(leaf->lvalue.l, level+1, df);
+                    leaf->print(leaf->rvalue.l, level+1, df);
                     break;
     case Leaf::UnaryOperation : qDebug()<<"uop"<<leaf->op;
-                    leaf->print(leaf->lvalue.l, level+1);
+                    leaf->print(leaf->lvalue.l, level+1, df);
                     break;
     case Leaf::BinaryOperation : qDebug()<<"bop"<<leaf->op;
-                    leaf->print(leaf->lvalue.l, level+1);
-                    leaf->print(leaf->rvalue.l, level+1);
+                    leaf->print(leaf->lvalue.l, level+1, df);
+                    leaf->print(leaf->rvalue.l, level+1, df);
                     break;
     case Leaf::Function :
                     if (leaf->series) {
                         qDebug()<<"function"<<leaf->function<<"parm="<<*(leaf->series->lvalue.n);
-                        if (leaf->lvalue.l) leaf->print(leaf->lvalue.l, level+1);
+                        if (leaf->lvalue.l) leaf->print(leaf->lvalue.l, level+1, df);
                     } else {
                         qDebug()<<"function"<<leaf->function<<"parms:"<<leaf->fparms.count();
-                        foreach(Leaf*l, leaf->fparms) leaf->print(l, level+1);
+                        foreach(Leaf*l, leaf->fparms) leaf->print(l, level+1, df);
                     }
                     break;
     case Leaf::Vector : qDebug()<<"vector";
-                    leaf->print(leaf->lvalue.l, level+1);
-                    leaf->print(leaf->fparms[0], level+1);
-                    leaf->print(leaf->fparms[1], level+1);
+                    leaf->print(leaf->lvalue.l, level+1, df);
+                    leaf->print(leaf->fparms[0], level+1, df);
+                    leaf->print(leaf->fparms[1], level+1, df);
     case Leaf::Conditional : qDebug()<<"cond"<<op;
         {
-                    leaf->print(leaf->cond.l, level+1);
-                    leaf->print(leaf->lvalue.l, level+1);
-                    if (leaf->rvalue.l) leaf->print(leaf->rvalue.l, level+1);
+                    leaf->print(leaf->cond.l, level+1, df);
+                    leaf->print(leaf->lvalue.l, level+1, df);
+                    if (leaf->rvalue.l) leaf->print(leaf->rvalue.l, level+1, df);
         }
         break;
     case Leaf::Parameters :
         {
         qDebug()<<"parameters"<<leaf->fparms.count();
-        foreach(Leaf*l, fparms) leaf->print(l, level+1);
+        foreach(Leaf*l, fparms) leaf->print(l, level+1, df);
         }
         break;
 
@@ -939,6 +962,7 @@ bool Leaf::isNumber(DataFilterRuntime *df, Leaf *leaf)
     case Leaf::BinaryOperation : return true;
     case Leaf::Function : return true;
     case Leaf::Vector :
+    case Leaf::Index :
     case Leaf::Conditional :
         {
             return true;
@@ -1022,6 +1046,28 @@ void Leaf::validateFilter(Context *context, DataFilterRuntime *df, Leaf *leaf)
         }
         return;
 
+    case Leaf::Index :
+        {
+            if (leaf->lvalue.l->type != Leaf::Symbol) {
+                leaf->inerror = true;
+                DataFiltererrors << QString(tr("Array subscript needs a symbol name."));
+                return;
+            }
+            QString symbol = leaf->lvalue.l ? *(leaf->lvalue.l->lvalue.n) : "";
+            if (df->dataSeriesSymbols.contains(symbol)) {
+                leaf->seriesType =  RideFile::seriesForSymbol(symbol);
+            } else {
+                leaf->seriesType = RideFile::none;
+            }
+            leaf->validateFilter(context, df, leaf->fparms[0]);
+            if (!Leaf::isNumber(df, leaf->fparms[0])) {
+                leaf->fparms[0]->inerror = true;
+                DataFiltererrors << QString(tr("Index must be numeric."));
+            }
+            leaf->validateFilter(context, df, leaf->lvalue.l);
+            return;
+        }
+
     case Leaf::Function :
         {
             // is the symbol valid?
@@ -1100,6 +1146,69 @@ void Leaf::validateFilter(Context *context, DataFilterRuntime *df, Leaf *leaf)
 
                     // still normal parm check !
                     foreach(Leaf *p, leaf->fparms) validateFilter(context, df, p);
+
+                } else if (leaf->function == "XDATA") {
+
+                    leaf->dynamic = false;
+
+                    if (leaf->fparms.count() != 3) {
+                        leaf->inerror = true;
+                        DataFiltererrors << QString(tr("XDATA needs 3 parameters."));
+                    } else {
+
+                        // are the first two strings ?
+                        Leaf *first=leaf->fparms[0];
+                        Leaf *second=leaf->fparms[1];
+                        if (first->type != Leaf::String || second->type != Leaf::String) {
+                            DataFiltererrors << QString(tr("XDATA expects a string for first two parameters"));
+                            leaf->inerror = true;
+                        }
+
+                        // is the third a symbol we like?
+                        Leaf *third=leaf->fparms[2];
+                        if (third->type != Leaf::Symbol) {
+                            DataFiltererrors << QString(tr("XDATA expects a symbol, one of sparse, repeat, interpolate or resample for third parameter."));
+                            leaf->inerror = true;
+                        } else {
+                            QStringList xdataValidSymbols;
+                            xdataValidSymbols << "sparse" << "repeat" << "interpolate" << "resample";
+                            QString symbol = *(third->lvalue.n);
+                            if (!xdataValidSymbols.contains(symbol, Qt::CaseInsensitive)) {
+                                DataFiltererrors << QString(tr("XDATA expects one of sparse, repeat, interpolate or resample for third parameter. (%1)").arg(symbol));
+                                leaf->inerror = true;
+                            } else {
+                                // remember what algorithm was selected
+                                int index = xdataValidSymbols.indexOf(symbol, Qt::CaseInsensitive);
+                                // we're going to set explicitly rather than by cast
+                                // so we don't need to worry about ordering the enum and stringlist
+                                switch(index) {
+                                case 0: leaf->xjoin = RideFile::SPARSE; break;
+                                case 1: leaf->xjoin = RideFile::REPEAT; break;
+                                case 2: leaf->xjoin = RideFile::INTERPOLATE; break;
+                                case 3: leaf->xjoin = RideFile::RESAMPLE; break;
+                                }
+                            }
+                        }
+                    }
+
+                } else if (leaf->function == "XDATA_UNITS") {
+
+                    leaf->dynamic = false;
+
+                    if (leaf->fparms.count() != 2) {
+                        leaf->inerror = true;
+                        DataFiltererrors << QString(tr("XDATA_UNITS needs 2 parameters."));
+                    } else {
+
+                        // are the first two strings ?
+                        Leaf *first=leaf->fparms[0];
+                        Leaf *second=leaf->fparms[1];
+                        if (first->type != Leaf::String || second->type != Leaf::String) {
+                            DataFiltererrors << QString(tr("XDATA_UNITS expects a string for first two parameters"));
+                            leaf->inerror = true;
+                        }
+
+                    }
 
                 } else if (leaf->function == "isset" || leaf->function == "set" || leaf->function == "unset") {
 
@@ -1242,6 +1351,26 @@ void Leaf::validateFilter(Context *context, DataFilterRuntime *df, Leaf *leaf)
                         leaf->inerror = true;
                     }
 
+                } else if (leaf->lvalue.l->type == Leaf::Index) {
+
+                    // add symbol
+                    QString symbol = *(leaf->lvalue.l->lvalue.l->lvalue.n);
+
+                    // add generic symbols
+                    if (!df->dataSeriesSymbols.contains(symbol)) {
+                        df->symbols.insert(symbol, Result(0));
+                    }
+
+                    // validate rhs is numeric
+                    bool rhsType = Leaf::isNumber(df, leaf->rvalue.l);
+                    if (!rhsType) {
+                        DataFiltererrors << QString(tr("variables must be numeric."));
+                        leaf->inerror = true;
+                    }
+
+                    // validate the symbol (after we added it!)
+                    validateFilter(context, df, leaf->lvalue.l);
+
                 } else {
 
                     DataFiltererrors << QString(tr("assignment must be to a symbol."));
@@ -1367,12 +1496,12 @@ DataFilter::DataFilter(QObject *parent, Context *context, QString formula) : QOb
     // save away the results if it passed semantic validation
     if (DataFiltererrors.count() != 0)
         treeRoot= NULL;
-
 }
 
 Result DataFilter::evaluate(RideItem *item, RideFilePoint *p)
 {
-    if (!item || !treeRoot || DataFiltererrors.count()) return Result(0);
+    if (!item || !treeRoot || DataFiltererrors.count())
+        return Result(0);
 
     // reset stack
     rt.stack = 0;
@@ -2198,6 +2327,146 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, float x, RideItem *m, RideF
                 }
                 break;
 
+        case 36 :
+                {   // BESTTIME (distance[km])
+
+                    if (leaf->fparms.count() != 1 || m->fileCache() == NULL) return Result(0);
+
+                    return Result (m->fileCache()->bestTime(eval(df, leaf->fparms[0], x, m, p, c).number));
+                 }
+
+        case 37 :
+                {   // XDATA ("XDATA", "XDATASERIES", (sparse, repeat, interpolate, resample)
+
+                    if (!p) {
+
+                        // processing ride item (e.g. filter, formula)
+                        // we return true or false if the xdata series exists for the ride in question
+                        QString xdata = *(leaf->fparms[0]->lvalue.s);
+                        QString series = *(leaf->fparms[1]->lvalue.s);
+
+                        if (m->xdataMatch(xdata, series, xdata, series)) return Result(1);
+                        else return Result(0);
+
+                    } else {
+
+                        // get iteration state from datafilter runtime
+                        int idx = df->indexes.value(this, 0);
+
+                        QString xdata = *(leaf->fparms[0]->lvalue.s);
+                        QString series = *(leaf->fparms[1]->lvalue.s);
+
+                        double returning = 0;
+
+                        // get the xdata value for this sample (if it exists)
+                        if (m->xdataMatch(xdata, series, xdata, series))
+                            returning = m->ride()->xdataValue(p, idx, xdata,series, leaf->xjoin);
+
+                        // update state
+                        df->indexes.insert(this, idx);
+
+                        return Result(returning);
+
+                    }
+                    return Result(0);
+                }
+                break;
+        case 38:  // PRINT(x) to qDebug
+                {
+
+                    // what is the parameter?
+                    if (leaf->fparms.count() != 1) qDebug()<<"bad print.";
+
+                    // symbol we are setting
+                    leaf->print(leaf->fparms[0], 0, df);
+                }
+                break;
+
+        case 39 :
+                {   // AUTOPROCESS(expression) to run automatic data processors
+                    Result returning(0);
+
+                    if (leaf->fparms.count() != 1) return returning;
+                    else returning = eval(df, leaf->fparms[0], x, m, p, c);
+
+                    if (returning.number) {
+
+                        // ack ! we need to autoprocess, so open the ride
+                        RideFile *f = m->ride();
+
+                        if (!f) return Result(0); // eek!
+
+                        // now run auto data processors
+                        if (DataProcessorFactory::instance().autoProcess(f)) {
+                            // rideFile is now dirty!
+                            m->setDirty(true);
+                        }
+                    }
+                    return returning;
+                }
+                break;
+
+        case 40 :
+                {   // POSTPROCESS (processor, expression ) run processor
+                    Result returning(0);
+
+                    if (leaf->fparms.count() < 2) return returning;
+                    else returning = eval(df, leaf->fparms[1], x, m, p, c);
+
+                    if (returning.number) {
+
+                        // processor we are running
+                        QString dp_name = *(leaf->fparms[0]->lvalue.n);
+
+                        // lookup processor
+                        DataProcessor* dp = DataProcessorFactory::instance().getProcessors().value(dp_name, NULL);
+
+                        if (!dp) return Result(0); // No such data processor
+
+                        // ack ! we need to autoprocess, so open the ride
+                        RideFile *f = m->ride();
+
+                        if (!f) return Result(0); // eek!
+
+                        // now run the data processor
+                        if (dp->postProcess(f)) {
+                            // rideFile is now dirty!
+                            m->setDirty(true);
+                        }
+                    }
+                    return returning;
+                }
+                break;
+
+        case 41 :
+                {   // XDATA_UNITS ("XDATA", "XDATASERIES")
+
+                    if (p) { // only valid when iterating
+
+                        // processing ride item (e.g. filter, formula)
+                        // we return true or false if the xdata series exists for the ride in question
+                        QString xdata = *(leaf->fparms[0]->lvalue.s);
+                        QString series = *(leaf->fparms[1]->lvalue.s);
+
+                        if (m->xdataMatch(xdata, series, xdata, series)) {
+
+                            // we matched, xdata and series contain what was matched
+                            XDataSeries *xs = m->ride()->xdata(xdata);
+
+                            if (xs && m->xdata().value(xdata,QStringList()).contains(series)) {
+                                int idx = m->xdata().value(xdata,QStringList()).indexOf(series);
+                                QString units;
+                                int count = m->ride()->xdata(xdata)->unitname.count();
+                                if (idx >= 0 && idx < xs->unitname.count())
+                                    units = xs->unitname[idx];
+                                return Result(units);
+                            }
+
+                        } else return Result("");
+
+                    } else return Result(""); // not for filtering
+                }
+                break;
         default:
             return Result(0);
         }
@@ -2218,8 +2487,9 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, float x, RideItem *m, RideF
         // ride series name when running through sample override metrics etc
         if (p && (lhsisNumber = df->dataSeriesSymbols.contains(*(leaf->lvalue.n))) == true) {
 
-            // its a ride series symbol !
-            return Result(p->value(RideFile::seriesForSymbol((*(leaf->lvalue.n)))));
+            RideFile::SeriesType type = RideFile::seriesForSymbol((*(leaf->lvalue.n)));
+            if (type == RideFile::index) return Result(m->ride()->dataPoints().indexOf(p));
+            return Result(p->value(type));
         }
 
         // user defined symbols override all others !
@@ -2366,15 +2636,43 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, float x, RideItem *m, RideF
         case ASSIGN:
         {
             // LHS MUST be a symbol...
-            if (leaf->lvalue.l->type == Leaf::Symbol) {
+            if (leaf->lvalue.l->type == Leaf::Symbol || leaf->lvalue.l->type == Leaf::Index) {
 
-                QString symbol = *(leaf->lvalue.l->lvalue.n);
-                Result value(rhs.isNumber ? rhs.number : 0);
-                df->symbols.insert(symbol, value);
+                Result  value(rhs.isNumber ? rhs.number : 0);
 
+                if (leaf->lvalue.l->type == Leaf::Symbol) {
+
+                    QString symbol = *(leaf->lvalue.l->lvalue.n);
+                    df->symbols.insert(symbol, value);
+
+                } else {
+
+                    if (leaf->lvalue.l->seriesType == RideFile::none) {
+
+                        QString symbol = *(leaf->lvalue.l->lvalue.l->lvalue.n);
+                        int index = eval(df,leaf->lvalue.l->fparms[0], x, m, p, c).number;
+
+                        // generic symbol
+                        if (df->symbols.contains(symbol)) {
+                            Result sym = df->symbols.value(symbol);
+
+                            // resize if need to
+                            if (sym.vector.count() <= index) {
+                                sym.vector.resize(index+1);
+                            }
+
+                            // add value
+                            sym.vector[index] = value.number;
+
+                            // update
+                            df->symbols.insert(symbol, sym);
+                        }
+                    }
+                }
                 return value;
             }
-            return Result(0);
+            // shouldn't get here!
+            return Result(RideFile::NA);
         }
         break;
 
@@ -2572,18 +2870,22 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, float x, RideItem *m, RideF
 
         spec.setDateRange(DateRange(QDate(1900,01,01).addDays(fromDS),QDate(1900,01,01).addDays(toDS)));
 
-        Result returning(0);
+        Result returning;
 
         // now iterate and evaluate for each
+        int count=0;
         foreach(RideItem *ride, m->context->athlete->rideCache->rides()) {
 
             if (!spec.pass(ride)) continue;
+
+            count++;
 
             // calculate value
             Result res = eval(df, leaf->lvalue.l, x, ride, p, c);
             if (res.isNumber) {
                 returning.number += res.number; // sum for easy access
-                returning.vector << res.number;
+                returning.vector.resize(count);
+                returning.vector[count-1] = res.number;
             }
         }
 
@@ -2591,9 +2893,40 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, float x, RideItem *m, RideF
         if (returning.vector.count() > 100)  {
             df->snips.insert(leaf->signature(), returning);
         }
-
         // always return as sum number (for now)
         return returning;
+    }
+    break;
+
+    //
+    // INDEXING INTO ACTIVITY SAMPLES
+    //
+    case Leaf::Index :
+    {
+        if (!p) return Result(0); // only applies when iterating over samples
+        int index = eval(df,leaf->fparms[0], x, m, p, c).number;
+
+        // ZERO if out of bounds (save a check)
+        if (index < 0 || index >= m->ride()->dataPoints().count())
+            return RideFile::NIL;
+
+        if (leaf->seriesType == RideFile::none) {
+
+            // generic symbol
+            QString symbol = *(leaf->lvalue.l->lvalue.n);
+            if (df->symbols.contains(symbol)) {
+                Result sym = df->symbols.value(symbol);
+                if (sym.vector.count() > index) {
+                    return Result(sym.vector[index]);
+                } else {
+                    return Result(RideFile::NIL);
+                }
+            }
+            // shouldn't get here!
+            return Result(RideFile::NIL);
+        }
+        // otherwise lets return the value !
+        return Result(m->ride()->dataPoints()[index]->value(leaf->seriesType));
     }
     break;
 

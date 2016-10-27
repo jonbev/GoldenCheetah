@@ -251,6 +251,21 @@ main(int argc, char *argv[])
         }
     }
 
+    #if 0 // quick hack to get list of metrics and descriptions
+    RideMetricFactory::instance().initialize();
+
+    const RideMetricFactory &factory = RideMetricFactory::instance();
+    QHashIterator<QString,RideMetric*> it(factory.metricHash());
+    it.toFront();
+    while(it.hasNext()) {
+        it.next();
+        fprintf(stderr, "%s|%s\n",
+                it.value()->name().toUtf8().data(),
+                it.value()->description().toUtf8().data());
+    }
+    exit(0);
+    #endif
+
     // help or version printed so just exit now
     if (help) {
         exit(0);
@@ -455,7 +470,7 @@ main(int argc, char *argv[])
 
         // The API server offers webservices (default port 12021, see httpserver.ini)
         // This is to enable integration with R and similar
-        if (appsettings->value(NULL, GC_START_HTTP, true).toBool() || server) {
+        if (appsettings->value(NULL, GC_START_HTTP, false).toBool() || server) {
 
             // notifications etc
             if (nogui) {

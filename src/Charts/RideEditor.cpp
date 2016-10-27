@@ -27,6 +27,8 @@
 #include "TabView.h"
 #include "HelpWhatsThis.h"
 #include "HrZones.h"
+#include "XDataDialog.h"
+#include "XDataTableModel.h"
 
 #include <QtGui>
 #include <QString>
@@ -61,6 +63,54 @@ static void secsMsecs(double value, int &secs, int &msecs)
     // come along?
     secs = floor(value); // assume it is positive!! .. it is a time field!
     msecs = round((value - secs) * 100) * 10;
+}
+
+// get clipboard into a 2-dim array of doubles
+void
+getPaste(QVector<QVector<double> >&cells, QStringList &seps, QStringList &head, bool hasHeader)
+{
+    QString text = QApplication::clipboard()->text();
+
+    int row = 0;
+    int col = 0;
+    bool first = true;
+
+    QString regexpStr;
+    regexpStr = "[";
+    foreach (QString sep, seps) regexpStr += sep;
+    regexpStr += "]";
+    QRegExp sep(regexpStr); // RegExp for separators
+
+    QRegExp ELine(("\n|\r|\r\n")); //RegExp for line endings
+
+    foreach(QString line, text.split(ELine)) {
+        if (line == "") continue;
+
+        if (hasHeader && first == true) {
+            foreach (QString token, line.split(sep)) {
+                head << token;
+            }
+        } else {
+            cells.resize(row+1);
+            foreach (QString token, line.split(sep)) {
+                cells[row].resize(col+1);
+
+                // use strtod to get better precision
+                char *p;
+                cells[row][col] = strtod(token.toLatin1(), &p);
+
+                col++;
+
+                // if there are more cols than in the
+                // heading row then set to unknown
+                while (hasHeader && (col+1) > head.count())
+                    head << "unknown";
+            }
+            row++;
+            col = 0;
+        }
+        first = false;
+    }
 }
 
 RideEditor::RideEditor(Context *context) : GcChartWindow(context), data(NULL), ride(NULL), context(context), inLUW(false), colMapper(NULL)
@@ -122,11 +172,31 @@ RideEditor::RideEditor(Context *context) : GcChartWindow(context), data(NULL), r
     connect(checkAct, SIGNAL(triggered()), this, SLOT(anomalies()));
     toolbar->addAction(checkAct);
 
+    QIcon xdataIcon(":images/toolbar/properties.png");
+    xdataAct = new QAction(xdataIcon, tr("XData"), this);
+    connect(xdataAct, SIGNAL(triggered()), this, SLOT(xdata()));
+    toolbar->addAction(xdataAct);
+
+    // add a tabbar, with no tabs, hide it and only show
+    // if there are more than one tabs (i.e. we have XDATA)
+    tabbar = new EditorTabBar(this);
+    tabbar->setShape(QTabBar::RoundedSouth);
+    tabbar->setCurrentIndex(0);
+    tabbar->setTabsClosable(true);
+    tabbar->hide();
+
+    // stack of standard + other editors
+    stack = new QStackedWidget(this);
+
     // empty model
     model = new RideFileTableModel(NULL);
 
     // set up the table
     table = new QTableView();
+
+    stack->addWidget(table);
+    stack->setCurrentIndex(0);
+
 #ifdef Q_OS_WIN
     QStyle *cde = QStyleFactory::create(OS_STYLE);
     table->verticalScrollBar()->setStyle(cde);
@@ -138,6 +208,7 @@ RideEditor::RideEditor(Context *context) : GcChartWindow(context), data(NULL), r
     table->setContextMenuPolicy(Qt::CustomContextMenu);
     table->setSelectionMode(QAbstractItemView::ContiguousSelection);
     table->installEventFilter(this);
+    //table->setFrameStyle(QFrame::NoFrame);
 
     HelpWhatsThis *helpTable = new HelpWhatsThis(table);
     table->setWhatsThis(helpTable->getWhatsThisText(HelpWhatsThis::ChartRides_Editor));
@@ -150,7 +221,8 @@ RideEditor::RideEditor(Context *context) : GcChartWindow(context), data(NULL), r
     // layout the widget
     //mainLayout->addWidget(title);
     mainLayout->addWidget(toolbar);
-    mainLayout->addWidget(table);
+    mainLayout->addWidget(stack);
+    mainLayout->addWidget(tabbar);
 
     // trap GC signals
     connect(context, SIGNAL(intervalSelected()), this, SLOT(intervalSelected()));
@@ -159,12 +231,18 @@ RideEditor::RideEditor(Context *context) : GcChartWindow(context), data(NULL), r
     connect(context, SIGNAL(rideDirty(RideItem*)), this, SLOT(rideDirty()));
     connect(context, SIGNAL(rideClean(RideItem*)), this, SLOT(rideClean()));
     connect(context, SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));
+    connect(tabbar, SIGNAL(currentChanged(int)), this, SLOT(tabbarSelected(int)));
+    connect(tabbar, SIGNAL(tabCloseRequested(int)), this, SLOT(removeTabRequested(int)));
 
     // put find tool and anomaly list in the controls
     findTool = new FindDialog(this);
     findTool->hide();
     anomalyTool = new AnomalyDialog(this);
     anomalyTool->hide();
+
+    // xdatatool
+    xdataTool = new XDataDialog(this);
+    xdataTool->hide();
 
     // allow us to jump to an anomaly
     connect(anomalyTool->anomalyList, SIGNAL(itemSelectionChanged()), this, SLOT(anomalySelected()));
@@ -186,8 +264,18 @@ RideEditor::configChanged(qint32)
     palette.setColor(QPalette::Text, GCColor::invertColor(GColor(CPLOTBACKGROUND)));
     palette.setColor(QPalette::Normal, QPalette::Window, GCColor::invertColor(GColor(CPLOTBACKGROUND)));
     setPalette(palette);
+    tabbar->setPalette(palette);
+    QColor faded = GCColor::invertColor(GColor(CPLOTBACKGROUND));
+    tabbar->setStyleSheet(QString("QTabBar::tab { background-color: %1; border: 0.5px solid %1; color: rgba(%3,%4,%5,50%) }"
+                                  "QTabBar::tab:selected { background-color: %1; color: %2; border: 2px solid %1; border-bottom-color: %6 }"
+                                  "QTabBar::close-button:!selected { background-color: %1; }")
+                    .arg(GColor(CPLOTBACKGROUND).name())
+                    .arg(GCColor::invertColor(GColor(CPLOTBACKGROUND)).name())
+                    .arg(faded.red()).arg(faded.green()).arg(faded.blue())
+                    .arg(GColor(CPLOTMARKER).name()));
     table->setPalette(palette);
-    table->setStyleSheet(QString("QTableView QTableCornerButton::section { background-color: %1; color: %2; border: %1 }")
+    table->setStyleSheet(QString("QTableView QTableCornerButton::section { background-color: %1; color: %2; border: %1 }"
+                                 "QHeaderView { background-color: %1; color: %2; border: %1 }")
                     .arg(GColor(CPLOTBACKGROUND).name())
                     .arg(GCColor::invertColor(GColor(CPLOTBACKGROUND)).name()));
     table->horizontalHeader()->setStyleSheet(QString("QHeaderView::section { background-color: %1; color: %2; border: 0px }")
@@ -202,6 +290,15 @@ RideEditor::configChanged(qint32)
 #endif
     toolbar->setStyleSheet(QString("::enabled { background: %1; color: %2; border: 0px; } ").arg(GColor(CPLOTBACKGROUND).name())
                     .arg(GCColor::invertColor(GColor(CPLOTBACKGROUND)).name()));
+
+    // the xdata editors
+    QMapIterator<QString, XDataEditor *>it(xdataEditors);
+    it.toFront();
+    while(it.hasNext()) {
+        it.next();
+        XDataEditor *edit = it.value();
+        edit->configChanged();
+    }
 }
 
 //----------------------------------------------------------------------
@@ -360,6 +457,7 @@ RideEditor::hideEvent(QHideEvent *)
 {
     findTool->hide();
     anomalyTool->hide();
+    xdataTool->hide();
 }
 
 void
@@ -377,6 +475,16 @@ RideEditor::anomalies()
     if (ride && ride->ride() && ride->ride()->dataPoints().count())
         anomalyTool->show();
     
+}
+
+void
+RideEditor::xdata()
+{
+    // work with xdata series (add / remove)
+    if (ride && ride->ride()) {
+        // show the xdata dialog
+        xdataTool->show();
+    }
 }
 
 void
@@ -971,54 +1079,6 @@ RideEditor::paste()
     ride->ride()->command->endLUW();
 }
 
-// get clipboard into a 2-dim array of doubles
-void
-RideEditor::getPaste(QVector<QVector<double> >&cells, QStringList &seps, QStringList &head, bool hasHeader)
-{
-    QString text = QApplication::clipboard()->text();
-
-    int row = 0;
-    int col = 0;
-    bool first = true;
-
-    QString regexpStr;
-    regexpStr = "[";
-    foreach (QString sep, seps) regexpStr += sep;
-    regexpStr += "]";
-    QRegExp sep(regexpStr); // RegExp for separators
-
-    QRegExp ELine(("\n|\r|\r\n")); //RegExp for line endings
-
-    foreach(QString line, text.split(ELine)) {
-        if (line == "") continue;
-
-        if (hasHeader && first == true) {
-            foreach (QString token, line.split(sep)) {
-                head << token;
-            }
-        } else {
-            cells.resize(row+1);
-            foreach (QString token, line.split(sep)) {
-                cells[row].resize(col+1);
-
-                // use strtod to get better precision
-                char *p;
-                cells[row][col] = strtod(token.toLatin1(), &p);
-
-                col++;
-
-                // if there are more cols than in the
-                // heading row then set to unknown
-                while (hasHeader && (col+1) > head.count())
-                    head << "unknown";
-            }
-            row++;
-            col = 0;
-        }
-        first = false;
-    }
-}
-
 void
 RideEditor::pasteSpecial()
 {
@@ -1244,6 +1304,139 @@ void CellDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
 }
 
 //----------------------------------------------------------------------
+// XData Cell item delegate
+//----------------------------------------------------------------------
+
+// Cell editor - item delegate
+XDataCellDelegate::XDataCellDelegate(XDataEditor *xdataEditor, QObject *parent) : QItemDelegate(parent), xdataEditor(xdataEditor) {}
+
+// setup editor for edit of field!!
+QWidget *XDataCellDelegate::createEditor(QWidget *parent, const QStyleOptionViewItem &, const QModelIndex &index) const
+{
+    // what are we editing?
+    switch(index.column()) {
+
+    case 0 :
+    {
+
+        QTimeEdit *timeEdit = new QTimeEdit(parent);
+        timeEdit->setDisplayFormat ("hh:mm:ss.zzz");
+        connect(timeEdit, SIGNAL(editingFinished()), this, SLOT(commitAndCloseEditor()));
+        return timeEdit;
+
+    }
+    break;
+
+    default:
+    {
+        QDoubleSpinBox *valueEdit = new QDoubleSpinBox(parent);
+        connect(valueEdit, SIGNAL(editingFinished()), this, SLOT(commitAndCloseEditor()));
+        return valueEdit;
+    }
+    break;
+    }
+}
+
+// user hit tab or return so save away the data to our model
+void XDataCellDelegate::commitAndCloseEditor()
+{
+    QDoubleSpinBox *editor = qobject_cast<QDoubleSpinBox *>(sender());
+    emit commitData(editor);
+    emit closeEditor(editor);
+}
+
+// We don't set anything because the data is saved within the view not the model!
+void XDataCellDelegate::setEditorData(QWidget *editor, const QModelIndex &index) const
+{
+    // what are we editing?
+    switch(index.column()) {
+
+        case 0 :
+        {
+
+            int seconds, msecs;
+            secsMsecs(index.model()->data(index, Qt::DisplayRole).toDouble(), seconds, msecs);
+
+            QTime value = QTime(0,0,0,0).addSecs(seconds).addMSecs(msecs);
+            QTimeEdit *timeEdit = qobject_cast<QTimeEdit *>(editor);
+            timeEdit->setTime(value);
+
+        }
+        break;
+
+        default:
+        {
+            QDoubleSpinBox *valueEdit = qobject_cast<QDoubleSpinBox *>(editor);
+            double value = index.model()->data(index, Qt::DisplayRole).toString().toDouble();
+            valueEdit->setValue(value);
+        }
+    }
+}
+
+void XDataCellDelegate::updateEditorGeometry(QWidget *editor,
+                              const QStyleOptionViewItem &option,
+                              const QModelIndex &/*index*/) const
+{
+    if (editor) editor->setGeometry(option.rect);
+}
+
+// We don't set anything because the data is saved within the view not the model!
+void XDataCellDelegate::setModelData(QWidget *editor, QAbstractItemModel *, const QModelIndex &index) const
+{
+    switch(index.column()) {
+
+    case 0 :
+    {
+        double seconds;
+        QTime midnight(0,0,0,0);
+        QTimeEdit *timeEdit = qobject_cast<QTimeEdit *>(editor);
+        seconds = (double)midnight.secsTo(timeEdit->time()) + (double)timeEdit->time().msec() / (double)1000.00;
+        xdataEditor->setModelValue(index.row(), index.column(), seconds);
+
+    }
+    break;
+
+    default:
+    {
+        QDoubleSpinBox *valueEdit = qobject_cast<QDoubleSpinBox *>(editor);
+        QString value = QString("%1").arg(valueEdit->value());
+        xdataEditor->setModelValue(index.row(), index.column(), valueEdit->value());
+    }
+    break;
+    }
+}
+
+// anomalies are underlined in red, otherwise straight paintjob
+void XDataCellDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
+                         const QModelIndex &index) const
+{
+    // what are we editing?
+    QString value;
+    switch(index.column()) {
+
+    case 0:
+    {
+        int seconds, msecs;
+        secsMsecs(index.model()->data(index, Qt::DisplayRole).toDouble(), seconds, msecs);
+        value = QTime(0,0,0,0).addSecs(seconds).addMSecs(msecs).toString("hh:mm:ss.zzz");
+    }
+    break;
+
+    default:
+    {
+        value = index.model()->data(index, Qt::DisplayRole).toString();
+    }
+        break;
+    }
+
+    // normal render
+    QStyleOptionViewItem myOption = option;
+    myOption.displayAlignment = Qt::AlignLeft | Qt::AlignVCenter;
+    drawDisplay(painter, myOption, myOption.rect, value);
+    drawFocus(painter, myOption, myOption.rect);
+}
+
+//----------------------------------------------------------------------
 // handle GC Signals
 //----------------------------------------------------------------------
 void
@@ -1269,6 +1462,15 @@ RideEditor::intervalSelected()
                                                                model->index(end,model->columnCount()-1)),
                                                                 QItemSelectionModel::Select);
         }
+
+        // propagate interval selection to the xdata editors
+        QMapIterator<QString, XDataEditor *>it(xdataEditors);
+        it.toFront();
+        while(it.hasNext()) {
+            it.next();
+            XDataEditor *edit = it.value();
+            edit->selectIntervals(ride->intervalsSelected());
+        }
     }
 }
 
@@ -1277,6 +1479,7 @@ RideEditor::rideSelected()
 {
     findTool->hide(); // hide the dialog!
     anomalyTool->hide();
+    xdataTool->hide();
 
     RideItem *current = myRideItem;
     if (!current || !current->ride() || !current->ride()->dataPoints().count()) {
@@ -1299,6 +1502,9 @@ RideEditor::rideSelected()
         data->found.clear(); // search is not active, so clear
     }
     model->setRide(ride->ride());
+
+    // Set for XDATA, including all views
+    setTabBar(true);
 
     // reset the save icon on the toolbar
     if (ride->isDirty()) saveAct->setEnabled(true);
@@ -1326,6 +1532,135 @@ RideEditor::rideSelected()
 
     // update finder pane to show available channels
     findTool->rideSelected();
+
+    // xdata
+    xdataTool->setRideItem(ride);
+}
+
+void
+RideEditor::tabbarSelected(int index)
+{
+    if (index > -1 && index < stack->count()) stack->setCurrentIndex(index);
+}
+
+void
+RideEditor::removeTabRequested(int index)
+{
+    // close tab is one way of removing the data from the ride
+    QMessageBox confirm(QMessageBox::Warning, tr("Delete XDATA Series"),
+                       QString(tr("You are about to permanently remove the XDATA "
+                          "series '%1' from the activity\n\n"
+                          "Do you want to continue?")).arg(tabbar->tabText(index)),
+                       QMessageBox::Ok | QMessageBox::Cancel);
+
+    if ((confirm.exec() & QMessageBox::Cancel) != 0) {
+        return;
+    }
+
+    // ok then lets remove it !
+    ride->ride()->command->removeXData(tabbar->tabText(index));
+    return;
+}
+
+void
+RideEditor::setTabBar(bool force)
+{
+    // do we need to?
+    QStringList xd, tabs;
+    for(int i=0; i< tabbar->count()-1; i++) tabs << tabbar->tabText(i);
+    QMapIterator<QString, XDataSeries *>ie(ride->ride()->xdata());
+    xd<<tr("STANDARD");
+    ie.toFront();
+    while(ie.hasNext()) {
+       ie.next();
+       xd << ie.key();
+    }
+
+    // no change
+    if (!force && xd == tabs) return;
+
+    // OK - if we get here the tabs have changed ....
+
+    // where are we, need to go back if possible.
+    QString currentTab = tabbar->currentIndex() >= 0 ? tabbar->tabText(tabbar->currentIndex()) : "";
+
+    foreach(QWidget*stacked, xdataViews) {
+        // remove from the stack
+        stack->removeWidget(stacked);
+        stacked->hide();
+    }
+    xdataViews.clear();
+
+    while(tabbar->count()) tabbar->removeTab(0);
+    tabbar->hide();
+    tabbar->addTab(tr("STANDARD"));
+
+    // disable close button on STANDARD tab
+    tabbar->setTabButton(0, QTabBar::RightSide, 0);
+    tabbar->setTabButton(0, QTabBar::LeftSide, 0);
+
+    if (ride->ride()->xdata().count()) {
+
+        // we need xdata editing too
+        QMapIterator<QString, XDataSeries *>it(ride->ride()->xdata());
+        it.toFront();
+        while(it.hasNext()) {
+            it.next();
+            QString name = it.key();
+            tabbar->addTab(name);
+
+            // add a widget for each view...
+            XDataEditor *widget = xdataEditors.value(it.key(), NULL);
+            if (widget == NULL) {
+                widget = new XDataEditor(this, it.key());
+                xdataEditors.insert(it.key(), widget);
+            }
+
+            // set ride item
+            widget->setRideItem(ride);
+
+            // add to view
+            xdataViews << widget;
+            stack->addWidget(widget);
+            widget->show();
+        }
+
+        // add a disabled tab with a "+" button
+        tabbar->addTab("");
+        QToolButton *tb = new QToolButton(this);
+        tb->setText("+");
+        tb->setAutoRaise(true);
+        tb->setStyleSheet(QString("QToolButton { background: %1; color: %2; border: 0px; } ")
+                          .arg(GColor(CPLOTBACKGROUND).name())
+                          .arg(GCColor::invertColor(GColor(CPLOTBACKGROUND)).name()));
+
+        tabbar->setTabButton(tabbar->count()-1, QTabBar::LeftSide, tb);
+        tabbar->setTabButton(tabbar->count()-1, QTabBar::RightSide, 0);
+        tabbar->setTabEnabled(tabbar->count()-1, false);
+        connect(tb, SIGNAL(clicked(bool)), xdataTool, SLOT(addXDataClicked()));
+
+        tabbar->show();
+    } else {
+        tabbar->hide();
+    }
+
+    // go back to where we were
+    bool found = false;
+    if (currentTab != "") {
+        for (int i=0; i<tabbar->count(); i++) {
+            if (tabbar->tabText(i) == currentTab) {
+                tabbar->setCurrentIndex(i);
+                stack->setCurrentIndex(i);
+                found = true;
+            }
+        }
+    }
+
+    // go to first tab by default.
+    if (!found) {
+        tabbar->setCurrentIndex(0);
+        stack->setCurrentIndex(0);
+    }
 }
 
 void
@@ -1384,6 +1719,9 @@ RideEditor::endCommand(bool undo, RideCommand *cmd)
     else redoAct->setEnabled(true);
     if (ride->ride()->command->undoCount() == 0) undoAct->setEnabled(false);
     else undoAct->setEnabled(true);
+
+    // react to xdata changes
+    setTabBar(false);
 
     // update the selection model when a command has been executed
     switch (cmd->type) {
@@ -1509,6 +1847,33 @@ RideEditor::endCommand(bool undo, RideCommand *cmd)
             }
             break;
 
+        case RideCommand::AddXDataSeries:
+        {
+                // show the user where the rows went
+                AddXDataSeriesCommand *sp = (AddXDataSeriesCommand*)cmd;
+                XDataEditor *editor = xdataEditors.value(sp->xdata);
+
+                if (!inLUW) editor->selectionModel()->clearSelection();
+
+                // highlight column we just arrived
+                if (undo == false) {
+                    QModelIndex top = editor->model()->index(0, editor->model()->columnCount()-1);
+                    QModelIndex bottom = editor->model()->index(editor->model()->rowCount()-1, editor->model()->columnCount()-1);
+                    QItemSelection highlight(top,bottom);
+
+                    // move cursor and highligth all the rows
+                    if (!inLUW) {
+                        editor->selectionModel()->clearSelection();
+                        editor->selectionModel()->setCurrentIndex(top, QItemSelectionModel::Select);
+                    }
+                    editor->selectionModel()->select(highlight, inLUW ? QItemSelectionModel::Select :
+                                                                QItemSelectionModel::SelectCurrent);
+                }
+
+
+        }
+        break;
+
         case RideCommand::LUW:
         {
            inLUW = false;
@@ -1536,6 +1901,7 @@ RideEditor::endCommand(bool undo, RideCommand *cmd)
     // check for anomalies
     if (!inLUW) {
         anomalyTool->check();
+        xdataTool->setRideItem(ride);// rebuild tables
 
         // let everyone know we changed some data
         ride->notifyRideDataChanged();
@@ -1757,7 +2123,7 @@ FindDialog::FindDialog(RideEditor *rideEditor) : rideEditor(rideEditor)
     resultsTable->horizontalHeader()->setStretchLastSection(true);
 
     QStringList header;
-    header << "Time" << "Column" << "Value";
+    header << tr("Time") << tr("Column") << tr("Value");
     resultsTable->setHorizontalHeaderLabels(header);
     resultsTable->verticalHeader()->hide();
     resultsTable->setShowGrid(false);
@@ -2139,7 +2505,7 @@ FindDialog::clearResultsTable()
 PasteSpecialDialog::PasteSpecialDialog(RideEditor *rideEditor, QWidget *parent) : QDialog(parent), rideEditor(rideEditor)
 {
     // setup the basic window settings; nonmodal, ontop and delete on close
-    setWindowTitle("Paste Special");
+    setWindowTitle(tr("Paste Special"));
     setAttribute(Qt::WA_DeleteOnClose);
     setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint | Qt::Tool);
 
@@ -2186,7 +2552,7 @@ PasteSpecialDialog::PasteSpecialDialog(RideEditor *rideEditor, QWidget *parent) 
 
     // what we got?
     seps << "\t";
-    rideEditor->getPaste(cells, seps, sourceHeadings, false);
+    getPaste(cells, seps, sourceHeadings, false);
 
     resultsTable = new QTableView(this);
     resultsTable->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -2204,7 +2570,7 @@ PasteSpecialDialog::PasteSpecialDialog(RideEditor *rideEditor, QWidget *parent) 
     QHBoxLayout *selectorLayout = new QHBoxLayout;
     QLabel *selectLabel = new QLabel(tr("Column Type"));
     columnSelect = new QComboBox;
-    columnSelect->addItem("Ignore");
+    columnSelect->addItem(tr("Ignore"));
     foreach (QString name, rideEditor->model->headings())
         columnSelect->addItem(name);
     selectorLayout->addWidget(selectLabel);
@@ -2545,7 +2911,7 @@ PasteSpecialDialog::sepsChanged()
     if (space->isChecked()) seps << " ";
     if (other->isChecked()) seps << otherText->text();
 
-    rideEditor->getPaste(cells, seps, sourceHeadings, hasHeader->isChecked());
+    getPaste(cells, seps, sourceHeadings, hasHeader->isChecked());
     setResultsTable();
 }
 
@@ -2629,3 +2995,465 @@ AnomalyDialog::reject()
 {
     hide();
 }
+
+QSize EditorTabBar::tabSizeHint(int index) const
+{
+    QSize def = QTabBar::tabSizeHint(index);
+    def.setWidth(20); // totally ignored, I hate QT sometimes
+    return def;
+}
+
+///
+/// XDataEditor
+///
+XDataEditor::XDataEditor(QWidget *parent, QString xdata) : QTableView(parent), xdata(xdata)
+{
+
+    _model = new XDataTableModel(NULL, xdata);
+
+#ifdef Q_OS_WIN
+    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    verticalScrollBar()->setStyle(cde);
+    horizontalScrollBar()->setStyle(cde);
+#endif
+    verticalHeader()->setDefaultSectionSize(20);
+    setModel(_model);
+    setContextMenuPolicy(Qt::CustomContextMenu);
+    setSelectionMode(QAbstractItemView::ContiguousSelection);
+    setGridStyle(Qt::NoPen);
+    setItemDelegate(new XDataCellDelegate(this));
+    setContextMenuPolicy(Qt::CustomContextMenu);
+
+    setContentsMargins(0,0,0,0);
+    installEventFilter(this);
+
+    configChanged();
+}
+
+void XDataEditor::configChanged()
+{
+
+    QPalette palette;
+    palette.setColor(QPalette::Active, QPalette::Background, GColor(CPLOTBACKGROUND));
+    palette.setColor(QPalette::Active, QPalette::Base, GColor(CPLOTBACKGROUND));
+    palette.setColor(QPalette::Active, QPalette::WindowText, GCColor::invertColor(GColor(CPLOTBACKGROUND)));
+    palette.setColor(QPalette::Active, QPalette::Text, GCColor::invertColor(GColor(CPLOTBACKGROUND)));
+    palette.setColor(QPalette::Active, QPalette::Window, GCColor::invertColor(GColor(CPLOTBACKGROUND)));
+    palette.setColor(QPalette::Inactive, QPalette::Background, GColor(CPLOTBACKGROUND));
+    palette.setColor(QPalette::Inactive, QPalette::Base, GColor(CPLOTBACKGROUND));
+    palette.setColor(QPalette::Inactive, QPalette::WindowText, GCColor::invertColor(GColor(CPLOTBACKGROUND)));
+    palette.setColor(QPalette::Inactive, QPalette::Text, GCColor::invertColor(GColor(CPLOTBACKGROUND)));
+    palette.setColor(QPalette::Inactive, QPalette::Window, GCColor::invertColor(GColor(CPLOTBACKGROUND)));
+    setPalette(palette);
+    //setFrameStyle(QFrame::NoFrame);
+    setStyleSheet(QString("QTableView QTableCornerButton::section { background-color: %1; color: %2; border: %1 }"
+                                  "QHeaderView { background-color: %1; color: %2; border: %1 }")
+                    .arg(GColor(CPLOTBACKGROUND).name())
+                    .arg(GCColor::invertColor(GColor(CPLOTBACKGROUND)).name()));
+    horizontalHeader()->setStyleSheet(QString("QHeaderView::section { background-color: %1; color: %2; border: 0px }")
+                    .arg(GColor(CPLOTBACKGROUND).name())
+                    .arg(GCColor::invertColor(GColor(CPLOTBACKGROUND)).name()));
+    verticalHeader()->setStyleSheet(QString("QHeaderView::section { background-color: %1; color: %2; border: 0px }")
+                    .arg(GColor(CPLOTBACKGROUND).name())
+                    .arg(GCColor::invertColor(GColor(CPLOTBACKGROUND)).name()));
+#ifndef Q_OS_MAC
+    verticalScrollBar()->setStyleSheet(TabView::ourStyleSheet());
+    horizontalScrollBar()->setStyleSheet(TabView::ourStyleSheet());
+#endif
+}
+
+void XDataEditor::setRideItem(RideItem *item)
+{
+    _model->setRide(item->ride());
+
+    // resize appropriately
+    resizeColumnsToContents();
+
+    // but time is xx:xx:xx:xxx
+    QFontMetrics fm(font());
+    int cwidth=fm.charWidth("X",0);
+    setColumnWidth(0, 15 * cwidth);
+}
+
+void
+XDataEditor::selectIntervals(QList<IntervalItem*> intervals)
+{
+    // no model or no series, nothing to select
+    if (_model == NULL || _model->series == NULL) return;
+
+    // highlight selection and jump to last
+    foreach(IntervalItem *interval, intervals) {
+
+        // what is the first dataPoint index for this interval?
+        int start = _model->series->timeIndex(interval->start);
+        int end = _model->series->timeIndex(interval->stop);
+        if (end < _model->series->datapoints.count()-1) end--;
+
+        // select all the rows
+        selectionModel()->clearSelection();
+        selectionModel()->setCurrentIndex(_model->index(start,0), QItemSelectionModel::Select);
+        selectionModel()->select(QItemSelection(_model->index(start,0),
+                                 _model->index(end,_model->columnCount()-1)),
+                                 QItemSelectionModel::Select);
+
+    }
+}
+
+void
+XDataEditor::setModelValue(int row, int col, double value)
+{
+    _model->setValue(row, col, value);
+}
+
+bool
+XDataEditor::eventFilter(QObject *object, QEvent *e)
+{
+    // not for me?
+    if (object != (QObject *)this) return false;
+
+    // what happened?
+    switch(e->type())
+    {
+        case QEvent::ContextMenu:
+            borderMenu(mapFromGlobal(QCursor::pos()));
+            return true;
+            break;
+
+
+        case QEvent::KeyPress:
+        {
+            QKeyEvent *keyEvent = static_cast<QKeyEvent *>(e);
+            if (keyEvent->modifiers() & Qt::ControlModifier) {
+                switch (keyEvent->key()) {
+
+                    case Qt::Key_C: // defacto standard for copy
+                        copy();
+                        return true;
+
+                    case Qt::Key_V: // defacto standard for paste
+                        paste();
+                        return true;
+
+                    case Qt::Key_X: // defacto standard for cut
+                        cut();
+                        return true;
+
+                    /*case Qt::Key_Y: // emerging standard for redo
+                         redo();
+                         return true;
+
+                    case Qt::Key_Z: // common standard for undo
+                         undo();
+                         return true;
+
+                    case Qt::Key_0:
+                        clear();
+                        return true;*/
+
+                    default:
+                        return false;
+                }
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+    return false;
+}
+
+void
+XDataEditor::borderMenu(const QPoint &pos)
+{
+
+    int column=0, row=0;
+    currentRow=currentColumn=-1;
+
+    // but we need to set the row or column to zero since
+    // we are in the border, this seems an easy and quick way
+    // to do this (the indexAt function assumes pos starts from
+    // 0 for row/col 0 and does not include the vertical
+    // or horizontal header width (which is what we go passed)
+    if (pos.y() <= horizontalHeader()->height()) {
+        row = 0;
+        column = horizontalHeader()->logicalIndexAt(pos - QPoint(verticalHeader()->width(), 0));
+    }
+    if (pos.x() <= verticalHeader()->width()) {
+        column = 0;
+        row = verticalHeader()->logicalIndexAt(pos - QPoint(0, horizontalHeader()->height()));
+    }
+
+    // set to negative if in the border
+    if (pos.x() < verticalHeader()->width()) column = -1;
+    if (pos.y() < horizontalHeader()->height()) row = -1;
+
+    QMenu menu(this);
+
+    QIcon cutIcon(":images/toolbar/cut.png");
+    QIcon pasteIcon(":images/toolbar/paste.png");
+    QIcon copyIcon(":images/toolbar/copy.png");
+
+    bool pastable = QApplication::clipboard()->text() == "" ? false : true;
+
+    QAction *cutAct = new QAction(cutIcon, tr("Cut"), this);
+    cutAct->setShortcut(QKeySequence("Ctrl+X"));
+    cutAct->setEnabled(isRowSelected() || isColumnSelected());
+    menu.addAction(cutAct);
+    connect(cutAct, SIGNAL(triggered()), this, SLOT(cut()));
+
+    QAction *copyAct = new QAction(copyIcon, tr("Copy"), this);
+    copyAct->setShortcut(QKeySequence("Ctrl+C"));
+    copyAct->setEnabled(true);
+    menu.addAction(copyAct);
+    connect(copyAct, SIGNAL(triggered()), this, SLOT(copy()));
+
+    QAction *pasteAct = new QAction(pasteIcon, tr("Paste"), this);
+    pasteAct->setShortcut(QKeySequence("Ctrl+V"));
+    pasteAct->setEnabled(pastable);
+    menu.addAction(pasteAct);
+    connect(pasteAct, SIGNAL(triggered()), this, SLOT(paste()));
+
+    menu.addSeparator();
+
+    if (row >= 0 && column < 0) {
+
+        QAction *delAct = new QAction(tr("Delete Row"), this);
+        delAct->setEnabled(isRowSelected());
+        menu.addAction(delAct);
+        connect(delAct, SIGNAL(triggered()), this, SLOT(delRow()));
+
+    }
+
+    if (column <= 0) {
+
+        if ((row+1) == _model->rowCount()) {
+            QAction *appAct = new QAction(tr("Append Row"), this);
+            appAct->setEnabled(true);
+            menu.addAction(appAct);
+            connect(appAct, SIGNAL(triggered()), this, SLOT(appRow()));
+        }
+        if (row >= 0) {
+            QAction *insAct = new QAction(tr("Insert Row"), this);
+            insAct->setEnabled(true);
+            menu.addAction(insAct);
+            connect(insAct, SIGNAL(triggered()), this, SLOT(insRow()));
+        }
+    }
+
+    if (column >= 2){
+
+        QAction *delAct = new QAction(tr("Remove Column"), this);
+        delAct->setEnabled(isColumnSelected());
+        menu.addAction(delAct);
+        connect(delAct, SIGNAL(triggered()), this, SLOT(delCol()));
+    }
+
+    if (row < 0) {
+        QAction *insAct = new QAction(tr("Add Column"), this);
+        insAct->setEnabled(true);
+        menu.addAction(insAct);
+        connect(insAct, SIGNAL(triggered()), this, SLOT(insCol()));
+    }
+
+    currentRow=row;
+    currentColumn=column;
+
+    //currentCell.row = row < 0 ? 0 : row;
+    //currentCell.column = column < 0 ? 0 : column;
+    menu.exec(mapToGlobal(QPoint(pos.x()+5, pos.y()+5)));
+}
+
+
+bool
+XDataEditor::isRowSelected()
+{
+    QList<QModelIndex> selection = selectionModel()->selection().indexes();
+
+    if (selection.count() > 0 &&
+        selection[0].column() == 0 &&
+        selection[selection.count()-1].column() == (_model->columnCount()-1))
+        return true;
+
+    return false;
+}
+
+bool
+XDataEditor::isColumnSelected()
+{
+    QList<QModelIndex> selection = selectionModel()->selection().indexes();
+
+    // if no rows then always true
+    if (_model->rowCount()==0) return true;
+
+    // must select every row for this column to be selected
+    if (selection.count() > 0 &&
+        selection[0].row() == 0 &&
+        selection[selection.count()-1].row() == (_model->rowCount()-1))
+        return true;
+
+    return false;
+}
+
+void
+XDataEditor::insCol()
+{
+    QString name, unit;
+    XDataSeriesSettingsDialog *dialog = new  XDataSeriesSettingsDialog(this, name, unit);
+    int ret = dialog->exec();
+
+    if (ret == QDialog::Accepted && name != "") {
+        _model->insertColumn(name);
+    }
+}
+void
+XDataEditor::delCol()
+{
+    _model->removeColumn(currentColumn);
+}
+void
+XDataEditor::insRow()
+{
+    _model->insertRow(currentRow, QModelIndex());
+}
+void
+XDataEditor::appRow()
+{
+    QVector<XDataPoint*> rows;
+    rows << new XDataPoint;
+    _model->appendRows(rows);  
+}
+void
+XDataEditor::appRows(int count)
+{
+    QVector<XDataPoint*> rows;
+    for (int i=0;i<count;i++)
+    rows << new XDataPoint;
+    _model->appendRows(rows);
+}
+void
+XDataEditor::delRow()
+{
+ // run through the selected rows and zap them
+    QList<QModelIndex> selection = selectionModel()->selection().indexes();
+
+    if (selection.count() > 0) {
+
+        // delete from table - we do in one hit since row-by-row is VERY slow
+        _model->ride->command->startLUW("Delete XData Rows");
+        _model->removeRows(selection[0].row(),
+                          selection[selection.count()-1].row() - selection[0].row() + 1, QModelIndex());
+        _model->ride->command->endLUW();
+
+    }
+}
+
+void
+XDataEditor::copy()
+{
+    QList<QModelIndex> selection = selectionModel()->selection().indexes();
+
+    if (selection.count() > 0) {
+        QString text;
+        for (int row = selection[0].row(); row <= selection[selection.count()-1].row(); row++) {
+
+            for (int column = selection[0].column();  column <= selection[selection.count()-1].column(); column++) {
+                if (column == selection[selection.count()-1].column())
+                    text += QString("%1").arg(_model->getValue(row,column-2), 0, 'g', 11);
+                else
+                    text += QString("%1\t").arg(_model->getValue(row,column-2), 0, 'g', 11);
+            }
+            text += "\n";
+        }
+        QApplication::clipboard()->setText(text);
+    }
+}
+
+void
+XDataEditor::cut()
+{
+    copy();
+    if (isRowSelected()) delRow();
+    else if (isColumnSelected()) delCol();
+}
+
+void
+XDataEditor::paste()
+{
+    QVector<QVector<double> > cells;
+    QStringList seps, head;
+    seps << "\t";
+
+    getPaste(cells, seps, head, false);
+
+    // empty paste buffer
+    if (cells.count() == 0 || cells[0].count() == 0) return;
+
+    // if selected range is not the same
+    // size as the copy buffer then barf
+    // unless just a single cell selected
+    QList<QModelIndex> selection = selectionModel()->selection().indexes();
+
+    // is anything selected?
+    if (selection.count() == 0) {
+        // wrong size
+        QMessageBox oops(QMessageBox::Critical, tr("Paste error"),
+                         tr("Please select target cell or cells to paste values into."));
+        oops.exec();
+        return;
+    }
+
+    int selectedrow = selection[0].row();
+    int selectedcol = selection[0].column();
+    int selectedrows = selection[selection.count()-1].row() - selectedrow + 1;
+    int selectedcols = selection[selection.count()-1].column() - selectedcol + 1;
+
+    if (selection.count() > 1 &&
+        (selectedrows != cells.count() || selectedcols != cells[0].count())) {
+
+        // wrong size
+        QMessageBox oops(QMessageBox::Critical, tr("Paste error"),
+                         tr("Copy buffer and selected area are diffferent sizes."));
+        oops.exec();
+        return;
+    }
+
+    // overrun cols?
+    if (selection.count() == 1 &&
+        (selectedcol + cells[0].count()) > _model->columnCount(QModelIndex())) {
+        QMessageBox oops(QMessageBox::Critical, tr("Paste error"),
+                         tr("Copy buffer has more columns than available."));
+        oops.exec();
+        return;
+    }
+
+    // overrun rows?
+    if (selection.count() == 1 &&
+        (selectedrow + cells.count()) > _model->rowCount(QModelIndex()) ) {
+        QMessageBox oops(QMessageBox::Critical, tr("Paste error"),
+                         tr("Copy buffer has more rows than available."));
+        oops.exec();
+        return;
+    }
+
+    // go paste!
+    _model->ride->command->startLUW("Paste XData Cells");
+
+    for (int i=0; i<cells.count(); i++) {
+
+        // just in case check boundary (i.e. truncate)
+        if (selectedrow+i > _model->rowCount() ) break;
+        for(int j=0; j<cells[i].count(); j++) {
+
+            // just in case check boundary (i.e. truncate)
+            if ((selectedcol+j > _model->columnCount()-1)) break;
+
+            // set table
+            setModelValue(selectedrow+i, selectedcol+j, cells[i][j]);
+        }
+    }
+    _model->ride->command->endLUW();
+}
+
+
+

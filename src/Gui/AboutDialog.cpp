@@ -167,6 +167,7 @@ ContributorsPage::ContributorsPage(Context *context) : context(context)
     contributors.append("Luke NRG");
     contributors.append("Magnus Gille");
     contributors.append("Marc Boudreau");
+    contributors.append("Marcel Breij");
     contributors.append("Mark Buller");
     contributors.append("Mark Liversedge");
     contributors.append("Mark Rages");
@@ -194,6 +195,7 @@ ContributorsPage::ContributorsPage(Context *context) : context(context)
     contributors.append("Steven Gribble");
     contributors.append("Thomas Weichmann");
     contributors.append("Tilman Schmiedeberg");
+    contributors.append("Ugo Borello");
     contributors.append("Vianney Boyer");
     contributors.append("Walter B&#252;rki");
     contributors.append("Yves Arrouye");

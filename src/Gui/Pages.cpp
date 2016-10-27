@@ -77,6 +77,7 @@ GeneralPage::GeneralPage(Context *context) : context(context)
     langCombo->addItem(tr("Portugese"));
     langCombo->addItem(tr("Chinese (Simplified)"));    
     langCombo->addItem(tr("Chinese (Traditional)"));
+    langCombo->addItem(tr("Dutch"));
 
     // Default to system locale
     QVariant lang = appsettings->value(this, GC_LANG, QLocale::system().name());
@@ -93,6 +94,7 @@ GeneralPage::GeneralPage(Context *context) : context(context)
     else if(lang.toString().startsWith("pt")) langCombo->setCurrentIndex(9);
     else if(lang.toString().startsWith("zh-cn")) langCombo->setCurrentIndex(10);    
     else if (lang.toString().startsWith("zh-tw")) langCombo->setCurrentIndex(11);
+    else if (lang.toString().startsWith("nl")) langCombo->setCurrentIndex(12);
     else langCombo->setCurrentIndex(0);
 
     configLayout->addWidget(langLabel, 0,0, Qt::AlignRight);
@@ -168,7 +170,7 @@ GeneralPage::GeneralPage(Context *context) : context(context)
 #ifdef GC_WANT_HTTP
     offset += 1;
     startHttp = new QCheckBox(tr("Enable API Web Services"), this);
-    startHttp->setChecked(appsettings->value(NULL, GC_START_HTTP, true).toBool());
+    startHttp->setChecked(appsettings->value(NULL, GC_START_HTTP, false).toBool());
     configLayout->addWidget(startHttp, 7,1, Qt::AlignLeft);
 #endif
 #ifdef GC_WANT_R
@@ -261,7 +263,7 @@ GeneralPage::saveClicked()
 {
     // Language
     static const QString langs[] = {
-        "en", "fr", "ja", "pt-br", "it", "de", "ru", "cs", "es", "pt", "zh-cn", "zh-tw"
+        "en", "fr", "ja", "pt-br", "it", "de", "ru", "cs", "es", "pt", "zh-cn", "zh-tw", "nl"
     };
     appsettings->setValue(GC_LANG, langs[langCombo->currentIndex()]);
 
@@ -459,7 +461,7 @@ CredentialsPage::CredentialsPage(QWidget *parent, Context *context) : QScrollAre
     grid->addWidget(dropauthLabel, ++row, 0);
     grid->addWidget(dropboxAuthorise, row, 1, Qt::AlignLeft | Qt::AlignVCenter);
     if (appsettings->cvalue(context->athlete->cyclist, GC_DROPBOX_TOKEN, "")!="")
-        grid->addWidget(dropboxAuthorised, row, 2, Qt::AlignLeft | Qt::AlignVCenter);
+        grid->addWidget(dropboxAuthorised, row, 1, Qt::AlignLeft | Qt::AlignVCenter);
     else
         dropboxAuthorised->hide(); // if no token no show
 
@@ -1145,6 +1147,7 @@ AboutRiderPage::AboutRiderPage(QWidget *parent, Context *context) : QWidget(pare
 
     dob = new QDateEdit(this);
     dob->setDate(appsettings->cvalue(context->athlete->cyclist, GC_DOB).toDate());
+    dob->setCalendarPopup(true);
 
     sex = new QComboBox(this);
     sex->addItem(tr("Male"));
@@ -4135,6 +4138,7 @@ CPPage::CPPage(Context *context, Zones *zones_, SchemePage *schemePage) :
     QLabel *pmaxLabel = new QLabel(tr("Pmax"));
     dateEdit = new QDateEdit;
     dateEdit->setDate(QDate::currentDate());
+    dateEdit->setCalendarPopup(true);
 
      // Use CP for FTP
     useCPForFTPCombo = new QComboBox(this);
@@ -4975,6 +4979,7 @@ LTPage::LTPage(Context *context, HrZones *hrZones, HrSchemePage *schemePage) :
     QLabel *ltLabel = new QLabel(tr("Lactate Threshold"));
     dateEdit = new QDateEdit;
     dateEdit->setDate(QDate::currentDate());
+    dateEdit->setCalendarPopup(true);
 
     ltEdit = new QDoubleSpinBox;
     ltEdit->setMinimum(0);
@@ -5686,6 +5691,7 @@ CVPage::CVPage(PaceZones* paceZones, PaceSchemePage *schemePage) :
     QLabel *cpLabel = new QLabel(tr("Critical Velocity"));
     dateEdit = new QDateEdit;
     dateEdit->setDate(QDate::currentDate());
+    dateEdit->setCalendarPopup(true);
 
     // CV default is 4min/km for Running a round number inline with
     // CP default and 1:36min/100 for swimming (4:1 relation)

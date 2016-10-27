@@ -23,13 +23,13 @@
 #include <QFormLayout>
 #include <QLabel>
 
-QString time_to_string(double secs)
+QString time_to_string(double secs, bool forceMinutes)
 {
     // negs are bad
     if (secs<0) secs=0;
 
     QString result;
-    if (secs < 60) result = QString("%1").arg(secs); // special case for < 60s
+    if (!forceMinutes && secs < 60) result = QString("%1").arg(secs); // special case for < 60s
     else{
         unsigned rounded = static_cast<unsigned>(round(secs));
         bool needs_colon = false;
@@ -40,6 +40,30 @@ QString time_to_string(double secs)
         }
         if (needs_colon)
             result += ":";
+        result += QString("%1").arg(rounded / 60, 2, 10, QLatin1Char('0'));
+        rounded %= 60;
+        result += ":";
+        result += QString("%1").arg(rounded, 2, 10, QLatin1Char('0'));
+    }
+    return result;
+}
+
+QString time_to_string_for_sorting(double secs)
+{
+    // negs are bad
+    if (secs<0) secs=0;
+
+    QString result;
+    if (secs < 60) result = QString("00:00:%1").arg(secs); // special case for < 60s
+    else{
+        unsigned rounded = static_cast<unsigned>(round(secs));
+        if (rounded >= 3600) {
+            result += QString("%1").arg(rounded / 3600, 2, 10, QLatin1Char('0'));
+            rounded %= 3600;
+            result += ":";
+        } else {
+            result += "00:";
+        }
         result += QString("%1").arg(rounded / 60, 2, 10, QLatin1Char('0'));
         rounded %= 60;
         result += ":";
@@ -181,6 +205,7 @@ DateSettingsEdit::DateSettingsEdit(QWidget *parent) : parent(parent), active(fal
     radioFrom->setFont(sameFont);
     startDateEdit = new QDateEdit(this);
     startDateEdit->setDate(QDate::currentDate().addMonths(-3));
+    startDateEdit ->setCalendarPopup(true);
     QHBoxLayout *from = new QHBoxLayout;
     from->addWidget(radioFrom);
     from->addWidget(startDateEdit);
@@ -192,7 +217,9 @@ DateSettingsEdit::DateSettingsEdit(QWidget *parent) : parent(parent), active(fal
     radioCustom->setFont(sameFont);
     radioCustom->setChecked(false);
     fromDateEdit = new QDateEdit(this);
+    fromDateEdit ->setCalendarPopup(true);
     toDateEdit = new QDateEdit(this);
+    toDateEdit ->setCalendarPopup(true);
     QHBoxLayout *custom = new QHBoxLayout;
     custom->addWidget(radioCustom);
     custom->addWidget(fromDateEdit);

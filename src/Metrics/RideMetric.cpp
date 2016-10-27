@@ -136,8 +136,16 @@
 // 126 08  Mar 2016 Mark Liversedge    Added count of To Exhaustions
 // 127 25  Mar 2016 Mark Liversedge    Best R metric for Exhaustion Points
 // 128 15  May 2016 Mark Liversedge    Add ActivityCRC so R scripts can use when caching
+// 129 10  Jul 2016 Damien Grauser     Average Running Cadence
+// 130 12  Jul 2016 Ale Martinez       Added Best Times for common distances
+// 131 20  Jul 2016 Damien Grauser     Average Running Vertical Oscillation and Ground Contact Time
+// 132 21  Jul 2016 Ale Martinez       Added SwimMetrics (Stroke Rate et al)
+// 133 22  Jul 2016 Damien Grauser     Added Efficiency Index
+// 134 22  Jul 2016 Damien Grauser     Add Stride length
+// 135 10  Aug 2016 Ale Martinez       Added Average Swim Pace for the 4 Strokes
+// 136 17  Oct 2016 Ale Martinez       Changed Best Times units to minutes
 
-int DBSchemaVersion = 128;
+int DBSchemaVersion = 136;
 
 RideMetricFactory *RideMetricFactory::_instance;
 QVector<QString> RideMetricFactory::noDeps;

@@ -64,7 +64,7 @@ QColor standardColor(int num)
    return standardColors.at(num % standardColors.count());
 }
 
-// we need to fix the sort order!
+// we need to fix the sort order! (fixed for time fields)
 class CTableWidgetItem : public QTableWidgetItem
 {
     public:
@@ -224,6 +224,13 @@ ComparePane::refreshTable()
             // get the metric name
             const RideMetric *m = factory.rideMetric(metric);
             if (m) {
+                // Skip metrics not relevant for all intervals in compare pane
+                bool isRelevant = false;
+                foreach(CompareInterval x, context->compareIntervals) {
+                    isRelevant = isRelevant || m->isRelevantForRide(x.rideItem);
+                }
+                if (!isRelevant) continue;
+
                 worklist << metric;
                 QString units;
                 // check for both original and translated
@@ -311,7 +318,7 @@ ComparePane::refreshTable()
     
                     // or maybe its a duration (worry about local lang or translated)
                     if (m->units(true) == "seconds" || m->units(true) == tr("seconds"))
-                        strValue = time_to_string(value);
+                        strValue = time_to_string_for_sorting(value);
 
                 }
 
@@ -394,6 +401,16 @@ ComparePane::refreshTable()
             // get the metric name
             const RideMetric *m = factory.rideMetric(metric);
             if (m) {
+                // Skip metrics not relevant for all ranges in compare pane
+                bool isRelevant = false;
+                foreach(CompareDateRange x, context->compareDateRanges) {
+                    if (x.context->athlete->rideCache->isMetricRelevantForRides(x.specification, m)) {
+                        isRelevant = true;
+                        break;
+                    }
+                }
+                if (!isRelevant) continue;
+
                 worklist << metric;
                 QString units;
                 if (!(m->units(context->athlete->useMetricUnits) == "seconds" || m->units(context->athlete->useMetricUnits) == tr("seconds")))
@@ -744,6 +761,53 @@ ComparePane::dropEvent(QDropEvent *event)
                     l->apower = p->apower;
                 }
             }
+
+            // now extract XDATA series too
+            QMapIterator<QString, XDataSeries *>xi(ride->xdata_);
+            xi.toFront();
+            while(xi.hasNext()) {
+                xi.next();
+
+                XDataSeries *x = new XDataSeries();
+                x->name = xi.value()->name;
+                x->valuename = xi.value()->valuename;
+                x->unitname = xi.value()->unitname;
+                x->valuetype = xi.value()->valuetype;
+
+                // add our xdata, with not points yet...
+                add.data->addXData(xi.key(), x);
+
+                // manage offsets
+                bool first = true;
+                double offset = 0.0f, offsetKM = 0.0f;
+
+                foreach(XDataPoint *p, xi.value()->datapoints) {
+
+                    if (p->secs >= stop) break;
+
+                    if (p->secs >= start) {
+
+                        // intervals always start from zero when comparing
+                        if (first) {
+                            first = false;
+                            offset = p->secs;
+                            offsetKM = p->km;
+                        }
+
+                        XDataPoint *addp = new XDataPoint();
+                        addp->km = p->km - offsetKM;
+                        addp->secs = p->secs - offset;
+
+                        for(int i=0; i< XDATA_MAXVALUES; i++) {
+                            addp->number[i] = p->number[i];
+                            addp->string[i] = p->string[i];
+                        }
+
+                        x->datapoints.append(addp);
+                    }
+                }
+            }
+
             add.data->recalculateDerivedSeries();
 
             // just use standard colors and cycle round

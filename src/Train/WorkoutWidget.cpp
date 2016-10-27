@@ -37,7 +37,6 @@
 #include <float.h> // DBL_EPSILON
 
 static int MINTOOLHEIGHT = 350; // minimum size for a full editor
-static int RECOVERY = 70; // anything below 70% of CP is a recovery effort
 
 static double MAXZOOM = 3.0f;
 static double MINZOOM = 0.2f;
@@ -121,6 +120,8 @@ WorkoutWidget::updateErgFile(ErgFile *f)
         f->Points.append(ErgFilePoint(p->x * 1000, p->y, p->y));
         f->Duration = p->x * 1000; // whatever the last is
     }
+
+    f->Laps = laps_;
 
     // update METADATA too
     // XXX missing!
@@ -1475,6 +1476,7 @@ WorkoutWidget::save()
         ergFile->Points.append(ErgFilePoint(p->x * 1000, p->y, p->y));
         ergFile->Duration = p->x * 1000; // whatever the last is
     }
+    ergFile->Laps = laps_;
 
     //
     // SAVE
@@ -1727,14 +1729,6 @@ WorkoutWidget::qwkcode()
 {
     codeStrings.clear();
 
-    int rnum=-1;
-    int CP=250; // default if none set
-    if (context->athlete->zones(false) != NULL &&
-        (rnum = context->athlete->zones(false)->whichRange(QDate::currentDate())) != -1) {
-        CP = context->athlete->zones(false)->getCP(rnum); // get actual value
-
-    }
-
     // convert the points to a string that can be edited
     // it is a list of sections separated by commas
     // of the form
@@ -1783,6 +1777,16 @@ WorkoutWidget::qwkcode()
         // how long is this section ?
         int duration = points_[i+1]->x - points_[i]->x;
 
+        bool hasStartLapMarker, hasEndLapMarker;
+        hasStartLapMarker = hasEndLapMarker = false;
+
+        foreach(ErgFileLap l, laps_) {
+            if (l.x == points_[i]->x*1000)
+                hasStartLapMarker = true;
+            if (l.x == points_[i+1]->x*1000)
+                hasEndLapMarker = true;
+        }
+
         // if duration is 0 its a rise, so move on 1
         if (duration <=0) {
 
@@ -1793,7 +1797,7 @@ WorkoutWidget::qwkcode()
 
                 // its a block
                 section = QString("0@%1-%2").arg(points_[i]->y).arg(points_[i+1]->y);
-                ap = points_[i]->y / CP * 100.0f;
+                ap = points_[i]->y;
 
             } else {
 
@@ -1807,16 +1811,19 @@ WorkoutWidget::qwkcode()
 
             // its a block
             section = QString("%1@%2").arg(qduration(duration)).arg(points_[i]->y);
-            ap = points_[i]->y / CP * 100.0f;
+            ap = points_[i]->y;
 
         } else {
             // its a rise
             section = QString("%1@%2-%3").arg(qduration(duration))
                                          .arg(points_[i]->y)
                                          .arg(points_[i+1]->y);
-            ap = ((points_[i]->y + points_[i+1]->y) / 2) / CP * 100.0f;
+            ap = ((points_[i]->y + points_[i+1]->y) / 2);
         }
 
+        if (hasEndLapMarker && hasStartLapMarker) {
+            section.append("L");
+        }
         blocks << section;
         blockp << i;
         aps << ap;
@@ -1833,7 +1840,8 @@ WorkoutWidget::qwkcode()
 
         // if we were above recovery and next is below recovery we have
         // an effort followed by some recovery so join together
-        if ((i < aps.count() -1) && aps[i] > RECOVERY && aps[i+1]<aps[i] && aps[i+1] < RECOVERY && !blocks[i+1].startsWith("0@")) {
+        if ((i < aps.count() -1) && aps[i+1]<aps[i] && !blocks[i+1].startsWith("0@")) {
+            section.remove("L");
             section += "r" + blocks[i+1];
             i++;
         }
@@ -1954,7 +1962,6 @@ WorkoutWidget::fromQwkcode(QString code)
 void
 WorkoutWidget::apply(QString code)
 {
-
     // clear points etc
     state = none;
     dragging = NULL;
@@ -1974,6 +1981,8 @@ WorkoutWidget::apply(QString code)
     codePoints.clear();
     codeStrings = code.split("\n");
 
+    laps_.clear();
+
     foreach(QString line, code.split("\n")) {
 
         //
@@ -1981,7 +1990,7 @@ WorkoutWidget::apply(QString code)
         //
         // A line can be (using [] to express optionality
         //
-        // [Nx]t1@w1[-w2][rt2@w3[-w4]]
+        // [Nx]t1@w1[-w2][rt2@w3[-w4]][L]
         //
         // Where Nx      - Repeat N times
         //       t1@w1   - Time t1 at Watts w1
@@ -1989,11 +1998,12 @@ WorkoutWidget::apply(QString code)
         //
         //       rt2@w3  - Optional recovery time t2 at watts w3
         //       -w4     - Optionally recover from time t2 watts w3 to watts w4
+        //       L       - Optionally add laps to encapsulate sections added by this qwkcode line
         //
         //       time t2/t2 can be expressed as a number and may
         //       optionally be followed by m or s for minutes or seconds
         //       if no units specified defaults to minutes
-        QRegExp qwk("([0-9]+x)?([0-9]+[ms]?)@([0-9]+)(-[0-9]+)?(r([0-9]+[ms]?)@([0-9]+)(-[0-9]+)?)?");
+        QRegExp qwk("([0-9]+x)?([0-9]+[ms]?)@([0-9]+)(-[0-9]+)?(r([0-9]+[ms]?)@([0-9]+)(-[0-9]+)?)?([L])?");
 
         // REGEXP capture texts
         //
@@ -2006,6 +2016,7 @@ WorkoutWidget::apply(QString code)
         // 6 - Recovery Duration with trailing units (optional) e.g. "3m"
         // 7 - Recovery watts without units e.g. "70"
         // 8 - Recovert rise to with leading minus e.g. "-100"
+        // 9 - Trailing L if lap markers is to be added
         //
         // Obviously if not present then the captured text will be blank
         // but we always get 9 captured texts.
@@ -2017,6 +2028,8 @@ WorkoutWidget::apply(QString code)
 
             // extract the values to use when adding
             int count, t1, t2, w1, w2, w3, w4;
+
+            bool insertLapMarkers = false;
 
             // initialise
             count = 1;
@@ -2073,6 +2086,9 @@ WorkoutWidget::apply(QString code)
             // w4
             if (qwk.cap(8) != "") w4 = -1 * qwk.cap(8).toInt();
 
+            // insert lap markers?
+            if (qwk.cap(9) == "L") insertLapMarkers = true;
+
             //DEBUGqDebug()<<"PARSE:" << qwk.cap(0) <<"count:"<<count<<"EFFORT:"<<t1<<w1<<w2<<"RECOVERY:"<<t2<<w3<<w4;
 
             //
@@ -2085,6 +2101,16 @@ WorkoutWidget::apply(QString code)
                 if (w1 != watts) {
                     index++;
                     new WWPoint(this, secs, w1);
+                    bool addLap = laps_.isEmpty() ? secs != 0 : (laps_.last().x != secs*1000) && secs != 0;
+                    if (insertLapMarkers && addLap)
+                    {
+                        ErgFileLap lap;
+                        lap.x = secs*1000;
+                        lap.LapNum = laps_.length() + 1;
+                        lap.selected = false;
+                        lap.name = "";
+                        laps_.append(lap);
+                    }
                 }
 
                 // end of block
@@ -2093,11 +2119,32 @@ WorkoutWidget::apply(QString code)
                 index++;
                 new WWPoint(this, secs, watts);
 
+                bool addLap = laps_.isEmpty() ? true : (laps_.last().x != secs*1000);
+                if (insertLapMarkers && addLap)
+                {
+                    ErgFileLap lap;
+                    lap.x = secs*1000;
+                    lap.LapNum = laps_.length() + 1;
+                    lap.selected = false;
+                    lap.name = "";
+                    laps_.append(lap);
+                }
+
                 // RECOVERY
                 if (t2 > 0) {
                     if (w3 != watts) {
                         index++;
                         new WWPoint(this, secs, w3);
+                        bool addLap = laps_.isEmpty() ? true : (laps_.last().x != secs*1000);
+                        if (insertLapMarkers && addLap)
+                        {
+                            ErgFileLap lap;
+                            lap.x = secs*1000;
+                            lap.LapNum = laps_.length() + 1;
+                            lap.selected = false;
+                            lap.name = "";
+                            laps_.append(lap);
+                        }
                     }
 
                     // end of recovery block
@@ -2105,6 +2152,16 @@ WorkoutWidget::apply(QString code)
                     watts = w4 >0 ? w4 : w3;
                     index++;
                     new WWPoint(this,secs,watts);
+                    bool addLap = laps_.isEmpty() ? true : (laps_.last().x != secs*1000);
+                    if (insertLapMarkers && addLap)
+                    {
+                        ErgFileLap lap;
+                        lap.x = secs*1000;
+                        lap.LapNum = laps_.length() + 1;
+                        lap.selected = false;
+                        lap.name = "";
+                        laps_.append(lap);
+                    }
                 }
             }
         }

@@ -47,20 +47,6 @@ static int fitFileReaderRegistered =
 
 static const QDateTime qbase_time(QDate(1989, 12, 31), QTime(0, 0, 0), Qt::UTC);
 
-//static double bearing = 0; // used to compute headwind depending on wind/cyclist bearing difference
-
-struct FitField {
-    int num;
-    int type; // FIT base_type
-    int size; // in bytes
-};
-
-struct FitDefinition {
-    int global_msg_num;
-    bool is_big_endian;
-    std::vector<FitField> fields;
-};
-
 /* FIT has uint32 as largest integer type. So qint64 is large enough to
  * store all integer types - no matter if they're signed or not */
 
@@ -69,16 +55,44 @@ struct FitDefinition {
 typedef qint64 fit_value_t;
 #define NA_VALUE std::numeric_limits<fit_value_t>::max()
 typedef std::string fit_string_value;
+typedef float fit_float_value;
 
-enum fitValueType { SingleValue, DoubleValue, StringValue };
+struct FitField {
+    int num;
+    int type; // FIT base_type
+    int size; // in bytes
+    int deve_idx; // Developer Data Index
+};
+
+struct FitDeveField {
+    int dev_id; // Developer Data Index
+    int num;
+    int type; // FIT base_type
+    int size; // in bytes
+    int native; // native field number
+    int scale;
+    int offset;
+    fit_string_value name;
+    fit_string_value unit;
+};
+
+struct FitDefinition {
+    int global_msg_num;
+    bool is_big_endian;
+    std::vector<FitField> fields;
+};
+
+enum fitValueType { SingleValue, ListValue, FloatValue, StringValue };
 typedef enum fitValueType FitValueType;
 
 struct FitValue
 {
     FitValueType type;
     fit_value_t v;
-    fit_value_t v2;
     fit_string_value s;
+    fit_float_value f;
+    QList<fit_value_t> list;
+    int size;
 };
 
 struct FitFileReaderState
@@ -88,8 +102,15 @@ struct FitFileReaderState
     RideFile *rideFile;
     time_t start_time;
     time_t last_time;
+    quint32 last_event_timestamp;
+    double start_timestamp;
     double last_distance;
     QMap<int, FitDefinition> local_msg_types;
+    QMap<QString, FitDeveField>  local_deve_fields; // All developer fields
+    QMap<int, int> record_extra_fields;
+    QMap<QString, int> record_deve_fields; // Developer fields in DEVELOPER XDATA
+    QMap<QString, int> record_deve_native_fields; // Developer fields with native values
+    QSet<int> record_native_fields;
     QSet<int> unknown_record_fields, unknown_global_msg_nums, unknown_base_type;
     int interval;
     int calibration;
@@ -105,6 +126,11 @@ struct FitFileReaderState
     QVariant isGarminSmartRecording;
     QVariant GarminHWM;
     XDataSeries *weatherXdata;
+    XDataSeries *swimXdata;
+    XDataSeries *deveXdata;
+    XDataSeries *extraXdata;
+    QMap<int, QString> deviceInfos;
+    QList<QString> xdataInfos;
 
     FitFileReaderState(QFile &file, QStringList &errors) :
         file(file), errors(errors), rideFile(NULL), start_time(0),
@@ -252,8 +278,202 @@ struct FitFileReaderState
         return i == 0x00000000 ? NA_VALUE : i;
     }
 
+    fit_float_value read_float32(int *count = NULL) {
+        float f;
+        if (file.read(reinterpret_cast<char*>(&f), 4) != 4)
+            throw TruncatedRead();
+        if (count)
+            (*count) += 4;
+
+        return f;
+    }
+
     void DumpFitValue(const FitValue& v) {
-        printf("type: %d %llx %llx %s\n", v.type, v.v, v.v2, v.s.c_str());
+        printf("type: %d %llx %s\n", v.type, v.v, v.s.c_str());
+    }
+
+    void convert2Run() {
+        if (rideFile->areDataPresent()->cad) {
+            foreach(RideFilePoint *pt, rideFile->dataPoints()) {
+                pt->rcad = pt->cad;
+                pt->cad = 0;
+            }
+            rideFile->setDataPresent(RideFile::rcad, true);
+            rideFile->setDataPresent(RideFile::cad, false);
+        }
+    }
+
+    QString getManuProd(int manu, int prod) {
+        if (manu == 1) {
+            // Garmin
+            // Product IDs can be found in c/fit_example.h in the FIT SDK.
+            // Multiple product IDs refer to different regions e.g. China, Japan etc.
+            switch (prod) {
+                case 473: case 474: case 475: case 494: return "Garmin FR301";
+                case 717: case 987: return "Garmin FR405";
+                case 782: return "Garmin FR50";
+                case 988: return "Garmin FR60";
+                case 1018: return "Garmin FR310XT";
+                case 1036: case 1199: case 1213: case 1387: return "Garmin Edge 500";
+                case 1124: case 1274: return "Garmin FR110";
+                case 1169: case 1333: case 1334: case 1386: return "Garmin Edge 800";
+                case 1325: return "Garmin Edge 200";
+                case 1328: return "Garmin FR910XT";
+                case 1345: case 1410: return "Garmin FR610";
+                case 1360: return "Garmin FR210";
+                case 1436: return "Garmin FR70";
+                case 1446: return "Garmin FR310XT 4T";
+                case 1482: case 1688: return "Garmin FR10";
+                case 1499: return "Garmin Swim";
+                case 1551: return "Garmin Fenix";
+                case 1561: case 1742: case 1821: return "Garmin Edge 510";
+                case 1567: return "Garmin Edge 810";
+                case 1623: return "Garmin FR620";
+                case 1632: return "Garmin FR220";
+                case 1765: case 2130: case 2131: case 2132: return "Garmin FR920XT";
+                case 1836: case 2052: case 2053: case 2070: case 2100: return "Garmin Edge 1000";
+                case 1903: return "Garmin FR15";
+                case 1907: return "Garmin Vivoactive";
+                case 1967: return "Garmin Fenix2";
+                case 2050: case 2188: case 2189: return "Garmin Fenix3";
+                case 2067: case 2260: return "Garmin Edge 520";
+                case 2147: return "Garmin Edge 25";
+                case 2153: return "Garmin FR225";
+                case 2156: return "Garmin FR630";
+                case 2157: return "Garmin FR230";
+                case 2238: return "Garmin Edge 20";
+                case 20119: return "Garmin Training Center";
+                case 65532: return "Android ANT+ Plugin";
+                case 65534: return "Garmin Connect Website";
+                default: return QString("Garmin %1").arg(prod);
+            }
+        } else if (manu == 6 ) {
+            // SRM
+            // powercontrol now uses FIT files from PC8
+            switch (prod) {
+
+            case 6: return "SRM PC6";
+            case 7: return "SRM PC7";
+            case 8: return "SRM PC8";
+            default: return "SRM Powercontrol";
+            }
+        } else if (manu == 9 ) {
+            // Powertap
+            switch (prod) {
+                case 14: return "Joule 2.0";
+                case 18: return "Joule";
+                case 19: return "Joule GPS";
+                case 22: return "Joule GPS+";
+                case 4096: return "Powertap G3";
+
+                default: return QString("Powertap Device %1").arg(prod);
+            }
+        } else if (manu == 13 ) {
+            // dynastream_oem
+            switch (prod) {
+                default: return QString("Dynastream %1").arg(prod);
+            }
+        } else if (manu == 29 ) {
+            // saxonar
+            switch (prod) {
+                case 1031: return "Power2max S";
+                default: return QString("Power2max %1").arg(prod);
+            }
+        } else if (manu == 32) {
+            // wahoo
+            switch (prod) {
+                case 0: return "Wahoo fitness";
+                default: return QString("Wahoo fitness %1").arg(prod);
+            }
+        } else if (manu == 38) {
+            // o_synce
+            switch (prod) {
+                case 1: return "o_synce navi2coach";
+                default: return QString("o_synce %1").arg(prod);
+            }
+        } else if (manu == 48) {
+            // Pioneer
+            switch (prod) {
+                case 2: return "Pioneer SGX-CA500";
+                default: return QString("Pioneer %1").arg(prod);
+            }
+        } else if (manu == 70) {
+            // does not set product at this point
+           return "Sigmasport ROX";
+        } else if (manu == 76) {
+            // Moxy
+            return "Moxy Monitor";
+        } else if (manu == 95) {
+            // Stryd
+            return "Stryd";
+        } else if (manu == 98) {
+            // BSX
+            switch(prod) {
+                  case 2: return "BSX Insight 2";
+                  default: return QString("BSX %1").arg(prod);
+            }
+        } else if (manu == 260) {
+            // Zwift!
+            return "Zwift";
+        } else if (manu == 267) {
+            // Bryton!
+            return "Bryton";
+        } else {
+            QString name = "Unknown FIT Device";
+            return name + QString(" %1:%2").arg(manu).arg(prod);
+        }
+    }
+
+    QString getDeviceType(int device_type) {
+        switch (device_type) {
+            case 4: return "Headunit"; // bike_power
+            case 11: return "Powermeter"; // bike_power
+            case 120: return "HR"; // heart_rate
+            case 121: return "Speed-Cadence"; // bike_speed_cadence
+            case 122: return "Cadence"; // bike_speed
+            case 123: return "Speed"; // bike_speed
+            case 124: return "Stride"; // stride_speed_distance
+
+            default: return QString("Type %1").arg(device_type);
+        }
+    }
+
+    RideFile::SeriesType getSeriesForNative(int native_num) {
+        switch (native_num) {
+
+            case 0: // POSITION_LAT
+                    return RideFile::lat;
+            case 1: // POSITION_LONG
+                    return RideFile::lon;
+            case 2: // ALTITUDE
+                    return RideFile::alt;
+            case 3: // HEART_RATE
+                    return RideFile::hr;
+            case 4: // CADENCE
+                    return RideFile::cad;
+            case 5: // DISTANCE
+                    return RideFile::km;
+            case 6: // SPEED
+                    return RideFile::kph;
+            case 7: // POWER
+                    return RideFile::watts;
+            case 9: // GRADE
+                    return RideFile::slope;
+            case 13: // TEMPERATURE
+                    return RideFile::temp;
+            case 30: //LEFT_RIGHT_BALANCE
+                    return RideFile::lrbalance;
+            case 39: // VERTICAL OSCILLATION
+                    return RideFile::rvert;
+            case 41: // GROUND CONTACT TIME
+                    return RideFile::rcontact;
+            case 54: // THb
+                    return RideFile::thb;
+            case 57: // SMO2
+                    return RideFile::smo2;
+            default:
+                    return RideFile::none;
+        }
     }
 
     void decodeFileId(const FitDefinition &def, int,
@@ -282,88 +502,7 @@ struct FitFileReaderState
                 default: ; // do nothing
             }
         }
-        if (manu == 1) {
-            // Garmin
-            // Product IDs can be found in c/fit_example.h in the FIT SDK.
-            // Multiple product IDs refer to different regions e.g. China, Japan etc.
-            switch (prod) {
-                case 473: case 474: case 475: case 494: rideFile->setDeviceType("Garmin FR301"); break;
-                case 717: case 987: rideFile->setDeviceType("Garmin FR405"); break;
-                case 782: rideFile->setDeviceType("Garmin FR50"); break;
-                case 988: rideFile->setDeviceType("Garmin FR60"); break;
-                case 1018: rideFile->setDeviceType("Garmin FR310XT"); break;
-                case 1036: case 1199: case 1213: case 1387: rideFile->setDeviceType("Garmin Edge 500"); break;
-                case 1124: case 1274: rideFile->setDeviceType("Garmin FR110"); break;
-                case 1169: case 1333: case 1334: case 1386: rideFile->setDeviceType("Garmin Edge 800"); break;
-                case 1325: rideFile->setDeviceType("Garmin Edge 200"); break;
-                case 1328: rideFile->setDeviceType("Garmin FR910XT"); break;
-                case 1345: case 1410: rideFile->setDeviceType("Garmin FR610"); break;
-                case 1360: rideFile->setDeviceType("Garmin FR210"); break;
-                case 1436: rideFile->setDeviceType("Garmin FR70"); break;
-                case 1446: rideFile->setDeviceType("Garmin FR310XT 4T"); break;
-                case 1482: case 1688: rideFile->setDeviceType("Garmin FR10"); break;
-                case 1499: rideFile->setDeviceType("Garmin Swim"); break;
-                case 1551: rideFile->setDeviceType("Garmin Fenix"); break;
-                case 1561: case 1742: case 1821: rideFile->setDeviceType("Garmin Edge 510"); break;
-                case 1567: rideFile->setDeviceType("Garmin Edge 810"); break;
-                case 1623: rideFile->setDeviceType("Garmin FR620"); break;
-                case 1632: rideFile->setDeviceType("Garmin FR220"); break;
-                case 1765: case 2130: case 2131: case 2132: rideFile->setDeviceType("Garmin FR920XT"); break;
-                case 1836: case 2052: case 2053: case 2070: case 2100: rideFile->setDeviceType("Garmin Edge 1000"); break;
-                case 1903: rideFile->setDeviceType("Garmin FR15"); break;
-                case 1967: rideFile->setDeviceType("Garmin Fenix2"); break;
-                case 2050: case 2188: case 2189: rideFile->setDeviceType("Garmin Fenix3"); break;
-                case 2067: case 2260: rideFile->setDeviceType("Garmin Edge 520"); break;
-                case 2147: rideFile->setDeviceType("Garmin Edge 25"); break;
-                case 2153: rideFile->setDeviceType("Garmin FR225"); break;
-                case 2238: rideFile->setDeviceType("Garmin Edge 20"); break;
-                case 20119: rideFile->setDeviceType("Garmin Training Center"); break;
-                case 65532: rideFile->setDeviceType("Android ANT+ Plugin"); break;
-                case 65534: rideFile->setDeviceType("Garmin Connect Website"); break;
-                default: rideFile->setDeviceType(QString("Garmin %1").arg(prod));
-            }
-        } else if (manu == 6 ) {
-            // SRM
-            // powercontrol now uses FIT files from PC8
-            switch (prod) {
-
-            case 6: rideFile->setDeviceType("SRM PC6");break;
-            case 7: rideFile->setDeviceType("SRM PC7");break;
-            case 8: rideFile->setDeviceType("SRM PC8");break;
-            default: rideFile->setDeviceType("SRM Powercontrol");break;
-            }
-        } else if (manu == 9 ) {
-            // Powertap
-            switch (prod) {
-                case 14: rideFile->setDeviceType("Joule 2.0");break;
-                case 18: rideFile->setDeviceType("Joule");break;
-                case 19: rideFile->setDeviceType("Joule GPS");break;
-                case 22: rideFile->setDeviceType("Joule GPS+");break;
-
-                default: rideFile->setDeviceType(QString("Powertap Device %1").arg(prod));break;
-            }
-        } else  if (manu == 38) {
-            // o_synce
-            switch (prod) {
-                case 1: rideFile->setDeviceType("o_synce navi2coach"); break;
-                default: rideFile->setDeviceType(QString("o_synce %1").arg(prod));
-            }
-        } else if (manu == 70) {
-            // does not set product at this point
-           rideFile->setDeviceType("Sigmasport ROX");
-
-        } else if (manu == 76) {
-            // Moxy
-            rideFile->setDeviceType("Moxy Monitor");
-
-        } else if (manu == 260) {
-            // Zwift!
-            rideFile->setDeviceType("Zwift");
-
-        } else {
-            rideFile->setDeviceType(QString("Unknown FIT Device %1:%2").arg(manu).arg(prod));
-        }
-        rideFile->setFileFormat("FIT (*.fit)");
+        rideFile->setDeviceType(getManuProd(manu, prod));
     }
 
     void decodeSession(const FitDefinition &def, int,
@@ -380,6 +519,8 @@ struct FitFileReaderState
                     switch (value) {
                         case 1: // running:
                             rideFile->setTag("Sport","Run");
+                            if (rideFile->dataPoints().count()>0)
+                                convert2Run();
                             break;
                         default: // if we can't work it out, assume bike
                             // but only if not already set to another sport,
@@ -507,24 +648,43 @@ struct FitFileReaderState
     void decodeDeviceInfo(const FitDefinition &def, int,
                           const std::vector<FitValue>& values) {
         int i = 0;
-        foreach(const FitField &field, def.fields) {
-            fit_value_t value = values[i++].v;
 
-            if( value == NA_VALUE )
-                continue;
+        int index=-1;
+        int manu = -1, prod = -1, version = -1, type = -1;
+        fit_string_value name;
+
+        QString deviceInfo;
+
+        foreach(const FitField &field, def.fields) {
+            FitValue value = values[i++];
+
+            //qDebug() << field.num << value;
 
             switch (field.num) {
+                case 0:   // device index
+                     index = value.v;
+                     break;
+                case 1:   // ANT+ device type
+                     type = value.v;
+                     break;
+                      // details: 0x78 = HRM, 0x79 = Spd&Cad, 0x7A = Cad, 0x7B = Speed
+                case 2:   // manufacturer
+                     manu = value.v;
+                     break;
+                case 4:   // product
+                     prod = value.v;
+                     break;
+                case 5:   // software version
+                     version = value.v;
+                     break;
+                case 27:   // product name
+                     name = values[i++].s;
+                 break;
 
-                // all fields are ignored at present
+                // all oher fields are ignored at present
                 case 253: //timestamp
                 case 3:   // serial number
-                case 2:   // manufacturer
-                case 4:   // product
-                case 5:   // software version
                 case 10:  // battery voltage
-                case 0:   // device index
-                case 1:   // ANT+ device type
-                          // details: 0x78 = HRM, 0x79 = Spd&Cad, 0x7A = Cad, 0x7B = Speed
                 case 6:   // hardware version
                 case 11:  // battery status
                 case 22:  // ANT network
@@ -536,7 +696,23 @@ struct FitFileReaderState
             if (FIT_DEBUG) {
                 printf("decodeDeviceInfo  field %d: %d bytes, num %d, type %d\n", i, field.size, field.num, field.type );
             }
+            //qDebug() << field.num << value.v;
         }
+
+        //deviceInfo += QString("Device %1 ").arg(index);
+        deviceInfo += QString("%1 ").arg(getDeviceType(type));
+        if (manu>-1 && prod>-1)
+            deviceInfo += getManuProd(manu, prod);
+        if (name.length()>0)
+            deviceInfo += QString(" %1").arg(name.c_str());
+        if (version>0)
+            deviceInfo += QString(" (v%1)").arg(version/100.0);
+
+        // What is 7 and 0 ?
+        // 3 for Moxy ?
+        if (type>-1 && type != 0 && type != 7 && type != 3)
+            deviceInfos.insert(index, deviceInfo);
+
     }
 
     void decodeEvent(const FitDefinition &def, int,
@@ -772,7 +948,7 @@ struct FitFileReaderState
         if (time_offset > 0)
             time = last_time + time_offset;
         double alt = 0, cad = 0, km = 0, hr = 0, lat = 0, lng = 0, badgps = 0, lrbalance = RideFile::NA;
-        double kph = 0, temperature = RideFile::NA, watts = 0, slope = 0;
+        double kph = 0, temperature = RideFile::NA, watts = 0, slope = 0, headwind = 0;
         double leftTorqueEff = 0, rightTorqueEff = 0, leftPedalSmooth = 0, rightPedalSmooth = 0;
 
         double leftPedalCenterOffset = 0;
@@ -790,141 +966,277 @@ struct FitFileReaderState
         double smO2 = 0, tHb = 0;
         //bool run=false;
 
+        XDataPoint *p_deve = NULL;
+        XDataPoint *p_extra = NULL;
+
         fit_value_t lati = NA_VALUE, lngi = NA_VALUE;
         int i = 0;
         foreach(const FitField &field, def.fields) {
+            FitValue _values = values[i];
             fit_value_t value = values[i].v;
-            fit_value_t value2 = values[i++].v2;
+            QList<fit_value_t> valueList = values[i++].list;
 
             if( value == NA_VALUE )
                 continue;
 
-            switch (field.num) {
-                case 253: // TIMESTAMP
-                          time = value + qbase_time.toTime_t();
-                          // Time MUST NOT go backwards
-                          // You canny break the laws of physics, Jim
-                          if (time < last_time)
-                              time = last_time;
-                          break;
-                case 0: // POSITION_LAT
-                        lati = value;
-                        break;
-                case 1: // POSITION_LONG
-                        lngi = value;
-                        break;
-                case 2: // ALTITUDE
-                        alt = value / 5.0 - 500.0;
-                        break;
-                case 3: // HEART_RATE
-                        hr = value;
-                        break;
-                case 4: // CADENCE
-                        if (rideFile->getTag("Sport", "Bike") == "Run")
-                            rcad = value;
-                        else
-                            cad = value;
-                        break;
+            int native_num = field.num;
+            qDebug()<< "native_num"<<native_num;
 
-                case 5: // DISTANCE
-                        km = value / 100000.0;
-                        break;
-                case 6: // SPEED
-                        kph = value * 3.6 / 1000.0;
-                        break;
-                case 7: // POWER
-                        watts = value;
-                        break;
-                case 8: break; // packed speed/dist
-                case 9: // GRADE
-                        slope = value / 100.0;
-                        break;
-                case 10: //resistance = value;
-                         break;
-                case 11: //time_from_course = value / 1000.0;
-                         break;
-                case 12: break; // "cycle_length"
-                case 13: // TEMPERATURE
-                         temperature = value;
-                         break;
-                case 29: // ACCUMULATED_POWER
-                         break;
-                case 30: //LEFT_RIGHT_BALANCE
-                         lrbalance = (value & 0x80 ? 100 - (value & 0x7F) : value & 0x7F);
-                         break;
-                case 31: // GPS Accuracy
+            if (field.deve_idx>-1) {
+                QString key = QString("%1.%2").arg(field.deve_idx).arg(field.num);
+                qDebug() << "deve_idx" << field.deve_idx << "num" << field.num << "type" << field.type;
+                qDebug() << "name" << local_deve_fields[key].name.c_str() << "unit" << local_deve_fields[key].unit.c_str() << local_deve_fields[key].offset << "(" << _values.v << _values.f << ")";
+
+                if (record_deve_native_fields.contains(key) && !record_native_fields.contains(record_deve_native_fields[key]))
+                    native_num = record_deve_native_fields[key];
+                else
+                    native_num = -1;
+            } else {
+                if (!record_native_fields.contains(native_num))
+                    record_native_fields.insert(native_num);
+            }
+
+            if (native_num>-1) {
+
+                switch (native_num) {
+                    case 253: // TIMESTAMP
+                              time = value + qbase_time.toTime_t();
+                              // Time MUST NOT go backwards
+                              // You canny break the laws of physics, Jim
+                              if (time < last_time)
+                                  time = last_time; // Not true for Bryton
+                              break;
+                    case 0: // POSITION_LAT
+                            lati = value;
+                            break;
+                    case 1: // POSITION_LONG
+                            lngi = value;
+                            break;
+                    case 2: // ALTITUDE
+                            alt = value / 5.0 - 500.0;
+                            break;
+                    case 3: // HEART_RATE
+                            hr = value;
+                            break;
+                    case 4: // CADENCE
+                            if (rideFile->getTag("Sport", "Bike") == "Run")
+                                rcad = value;
+                            else
+                                cad = value;
+                            break;
+
+                    case 5: // DISTANCE
+                            km = value / 100000.0;
+                            break;
+                    case 6: // SPEED
+                            kph = value * 3.6 / 1000.0;
+                            break;
+                    case 7: // POWER
+                            watts = value;
+                            break;
+                    case 8: break; // packed speed/dist
+                    case 9: // GRADE
+                            slope = value / 100.0;
+                            break;
+                    case 10: //resistance = value;
+                             break;
+                    case 11: //time_from_course = value / 1000.0;
+                             break;
+                    case 12: break; // "cycle_length"
+                    case 13: // TEMPERATURE
+                             temperature = value;
+                             break;
+                    case 29: // ACCUMULATED_POWER
+                             break;
+                    case 30: //LEFT_RIGHT_BALANCE
+                             lrbalance = (value & 0x80 ? 100 - (value & 0x7F) : value & 0x7F);
+                             break;
+                    case 31: // GPS Accuracy
+                             break;
+
+                    case 39: // VERTICAL OSCILLATION
+                             rvert = value / 100.0f;
+                             break;
+
+                    //case 40: // GROUND CONTACT TIME PERCENT
+                             //break;
+
+                    case 41: // GROUND CONTACT TIME
+                             rcontact = value / 10.0f;
+                             break;
+
+                    //case 42: // ACTIVITY_TYPE
+                    //         // TODO We should know/test value for run
+                    //         run = true;
+                    //         break;
+
+                    case 43: // LEFT_TORQUE_EFFECTIVENESS
+                             leftTorqueEff = value / 2.0;
+                             break;
+                    case 44: // RIGHT_TORQUE_EFFECTIVENESS
+                             rightTorqueEff = value / 2.0;
+                             break;
+                    case 45: // LEFT_PEDAL_SMOOTHNESS
+                             leftPedalSmooth = value / 2.0;
+                             break;
+                    case 46: // RIGHT_PEDAL_SMOOTHNESS
+                             rightPedalSmooth = value / 2.0;
+                             break;
+                    case 47: // COMBINED_PEDAL_SMOOTHNES
+                             //qDebug() << "COMBINED_PEDAL_SMOOTHNES" << value;
+                             break;
+                    case 53: // RUNNING CADENCE FRACTIONAL VALUE
+                             if (rideFile->getTag("Sport", "Bike") == "Run")
+                                 rcad += value/128.0f;
+                             else
+                                 cad += value/128.0f;
+                             break;
+                    case 54: // tHb
+                             tHb= value/100.0f;
+                             break;
+                    case 57: // SMO2
+                             smO2= value/10.0f;
+                             break;
+                    case 61: // ? GPS Altitude ? or atmospheric pressure ?
+                             break;
+                    case 66: // ??
+                             break;
+                    case 67: // ? Left Platform Center Offset ?
+                             leftPedalCenterOffset = value;
+                             break;
+                    case 68: // ? Right Platform Center Offset ?
+                             rightPedalCenterOffset = value;
+                             break;
+                    case 69: // ? Left Power Phase ?
+                             leftTopDeathCenter = round(valueList.at(0) * 360.0/256);
+                             leftBottomDeathCenter = round(valueList.at(1) * 360.0/256);
+                             break;
+                    case 70: // ? Left Peak Phase  ?
+                             leftTopPeakPowerPhase = round(valueList.at(0) * 360.0/256);
+                             leftBottomPeakPowerPhase = round(valueList.at(1) * 360.0/256);
+                             break;
+                    case 71: // ? Right Power Phase ?
+                             rightTopDeathCenter = round(valueList.at(0) * 360.0/256);
+                             rightBottomDeathCenter = round(valueList.at(1) * 360.0/256);
+                             break;
+                    case 72: // ? Right Peak Phase  ?
+                             rightTopPeakPowerPhase = round(valueList.at(0) * 360.0/256);
+                             rightBottomPeakPowerPhase = round(valueList.at(1) * 360.0/256);
+                             break;
+                    case 84: // Left right balance
+                             lrbalance = value/100.0;
+                             break;
+
+                    case 87: // ???
+                         native_num = -2; // currently ignored (even in EXTRA)
                          break;
 
-                case 39: // VERTICAL OSCILLATION
-                         rvert = value / 100.0f;
-                         break;
 
-                //case 40: // ACTIVITY_TYPE
-                //         // TODO We should know/test value for run
-                //         run = true;
-                //         break;
+                    default:
+                            unknown_record_fields.insert(native_num);
+                            native_num = -1;
+                }
+            }
 
-                case 41: // GROUND CONTACT TIME
-                         rcontact = value / 10.0f;
-                         break;
+            if (native_num == -1) {
+                // native, deve_native or deve to record.
 
-                case 43: // LEFT_TORQUE_EFFECTIVENESS
-                         leftTorqueEff = value / 2.0;
-                         break;
-                case 44: // RIGHT_TORQUE_EFFECTIVENESS
-                         rightTorqueEff = value / 2.0;
-                         break;
-                case 45: // LEFT_PEDAL_SMOOTHNESS
-                         leftPedalSmooth = value / 2.0;
-                         break;
-                case 46: // RIGHT_PEDAL_SMOOTHNESS
-                         rightPedalSmooth = value / 2.0;
-                         break;
-                case 47: // COMBINED_PEDAL_SMOOTHNES
-                         //qDebug() << "COMBINED_PEDAL_SMOOTHNES" << value;
-                         break;
-                case 53: // RUNNING CADENCE FRACTIONAL VALUE
-                         break;
-                case 54: // tHb
-                        tHb= value/100.0f;
-                        break;
-                case 57: // SMO2
-                        smO2= value/10.0f;
-                        break;
-                case 61: // ? GPS Altitude ? or atmospheric pressure ?
-                        break;
-                case 66: // ??
-                        break;
-                case 67: // ? Left Platform Center Offset ?
-                        leftPedalCenterOffset = value;
-                        break;
-                case 68: // ? Right Platform Center Offset ?
-                        rightPedalCenterOffset = value;
-                        break;
-                case 69: // ? Left Power Phase ?
-                        leftTopDeathCenter = round(value * 360.0/256);
-                        leftBottomDeathCenter = round(value2 * 360.0/256);
-                        break;
-                case 70: // ? Left Peak Phase  ?
-                        leftTopPeakPowerPhase = round(value * 360.0/256);
-                        leftBottomPeakPowerPhase = round(value2 * 360.0/256);
-                        break;
-                case 71: // ? Right Power Phase ?
-                        rightTopDeathCenter = round(value * 360.0/256);
-                        rightBottomDeathCenter = round(value2 * 360.0/256);
-                        break;
-                case 72: // ? Right Peak Phase  ?
-                        rightTopPeakPowerPhase = round(value * 360.0/256);
-                        rightBottomPeakPowerPhase = round(value2 * 360.0/256);
-                        break;
+                int idx = -1;
+
+                if (field.deve_idx>-1) {
+                    QString key = QString("%1.%2").arg(field.deve_idx).arg(field.num);
+                    FitDeveField deveField = local_deve_fields[key];
+
+                    int scale = deveField.scale;
+                    if (scale == -1)
+                        scale = 1;
+                    int offset = deveField.offset;
+                    if (offset == -1)
+                        offset = 0;
+
+                    if (!record_deve_fields.contains(key)) {
+                        QString name = deveField.name.c_str();
+
+                        if (deveField.native>-1) {
+                            int i = 0;
+                            RideFile::SeriesType series = getSeriesForNative(deveField.native);
+                            QString nativeName = rideFile->symbolForSeries(series);
+
+                            if (nativeName.length() == 0)
+                                nativeName = QString("FIELD_%1").arg(deveField.native);
+                            else
+                                i++;
+
+                            do {
+                                i++;
+                                name = nativeName + (i>1?QString("-%1").arg(i):"");
+                            }
+                            while (deveXdata->valuename.contains(name));
+                            
+                            xdataInfos.append(QString("DEVELOPER %1 : Field %2").arg(name).arg(deveField.name.c_str()));
+                        }
+
+                        deveXdata->valuename << name;
+                        deveXdata->unitname << deveField.unit.c_str();
+
+                        record_deve_fields.insert(key, record_deve_fields.count());
+                    }
+                    idx = record_deve_fields[key];
+
+                    if (idx>-1) {
+                        if (p_deve == NULL &&
+                                (_values.type == SingleValue ||
+                                 _values.type == FloatValue ||
+                                 _values.type == StringValue))
+                           p_deve = new XDataPoint();
+
+                        switch (_values.type) {
+                            case SingleValue: p_deve->number[idx]=_values.v/(float)scale+offset; break;
+                            case FloatValue: p_deve->number[idx]=_values.f/(float)scale+offset; break;
+                            case StringValue: p_deve->string[idx]=_values.s.c_str(); break;
+                            default: break;
+                        }
+                    }
+                } else {
+                    // Store standard native ignored
+                    if (!record_extra_fields.contains(field.num)) {
+                        RideFile::SeriesType series = getSeriesForNative(field.num);
+                        QString nativeName = rideFile->symbolForSeries(series);
+
+                        if (nativeName.length() == 0)
+                            nativeName = QString("FIELD_%1").arg(field.num);
+
+                        extraXdata->valuename << nativeName;
+                        extraXdata->unitname << "";
+
+                        record_extra_fields.insert(field.num, record_extra_fields.count());
+                    }
+                    idx = record_extra_fields[field.num];
+
+                    if (idx>-1) {
+                        if (p_extra == NULL &&
+                                (_values.type == SingleValue ||
+                                 _values.type == FloatValue ||
+                                 _values.type == StringValue))
+                           p_extra = new XDataPoint();
+
+                        switch (_values.type) {
+                            case SingleValue: p_extra->number[idx]=_values.v; break;
+                            case FloatValue: p_extra->number[idx]=_values.f; break;
+                            case StringValue: p_extra->string[idx]=_values.s.c_str(); break;
+                            default: break;
+                        }
+                    }
+
+                }
 
 
-                default:
-                         unknown_record_fields.insert(field.num);
             }
         }
+
         if (time == last_time)
-            return; // Sketchy, but some FIT files do this.
+            return; // Not true for Bryton
+
         if (stopped) {
             // As it turns out, this happens all the time in some FIT files.
             // Since we don't really understand the meaning, don't make noise.
@@ -961,22 +1273,6 @@ struct FitFileReaderState
         double secs = time - start_time;
         double nm = 0;
 
-        // compute bearing in order to calculate headwind
-        // XXif ((!rideFile->dataPoints().empty()) && (last_time != 0))
-        // XX{
-        // XX    RideFilePoint *prevPoint = rideFile->dataPoints().back();
-        // XX    // ensure a movement occurred and valid lat/lon in order to compute cyclist direction
-        // XX    if (  (prevPoint->lat != lat || prevPoint->lon != lng )
-        // XX       && (prevPoint->lat != 0 || prevPoint->lon != 0 )
-        // XX       && (lat != 0 || lng != 0 ) )
-        // XX                bearing = atan2(cos(lat)*sin(lng - prevPoint->lon),
-        // XX                                cos(prevPoint->lat)*sin(lat)-sin(prevPoint->lat)*cos(lat)*cos(lng - prevPoint->lon));
-        // XX}
-        // XXelse keep previous bearing or 0 at beginning
-
-        // XXdouble headwind = cos(bearing - rideFile->windHeading()) * rideFile->windSpeed() + kph;
-        double headwind = 0;
-
         int interval = 0;
         // if there are data points && a time difference > 1sec && smartRecording processing is requested at all
         if ((!rideFile->dataPoints().empty()) && (last_time != 0) &&
@@ -1001,7 +1297,7 @@ struct FitFileReaderState
             double deltaAlt = alt - prevPoint->alt;
             double deltaLon = lng - prevPoint->lon;
             double deltaLat = lat - prevPoint->lat;
-            //XX double deltaHeadwind = headwind - prevPoint->headwind;
+            // double deltaHeadwind = headwind - prevPoint->headwind;
             double deltaSlope = slope - prevPoint->slope;
             double deltaLeftRightBalance = lrbalance - prevPoint->lrbalance;
             double deltaLeftTE = leftTorqueEff - prevPoint->lte;
@@ -1071,14 +1367,23 @@ struct FitFileReaderState
         }
 
         if (km < 0.00001f) km = last_distance;
-        rideFile->appendPoint(secs, cad, hr, km, kph, nm, watts, alt, lng, lat, headwind, slope, temperature,
+        rideFile->appendOrUpdatePoint(secs, cad, hr, km, kph, nm, watts, alt, lng, lat, headwind, slope, temperature,
                      lrbalance, leftTorqueEff, rightTorqueEff, leftPedalSmooth, rightPedalSmooth,
                      leftPedalCenterOffset, rightPedalCenterOffset,
                      leftTopDeathCenter, rightTopDeathCenter, leftBottomDeathCenter, rightBottomDeathCenter,
                      leftTopPeakPowerPhase, rightTopPeakPowerPhase, leftBottomPeakPowerPhase, rightBottomPeakPowerPhase,
-                     smO2, tHb, rvert, rcad, rcontact, 0.0, interval);
+                     smO2, tHb, rvert, rcad, rcontact, 0.0, interval, false);
         last_time = time;
         last_distance = km;
+
+        if (p_deve != NULL) {
+            p_deve->secs = secs;
+            deveXdata->datapoints.append(p_deve);
+        }
+        if (p_extra != NULL) {
+            p_extra->secs = secs;
+            extraXdata->datapoints.append(p_extra);
+        }
     }
 
     void decodeLength(const FitDefinition &def, int time_offset,
@@ -1103,7 +1408,9 @@ struct FitFileReaderState
             time = last_time + time_offset;
         double cad = 0, km = 0, kph = 0;
 
-        bool length_type = false;
+        int length_type = 0;
+        int swim_stroke = 0;
+        int total_strokes = 0;
         double length_duration = 0.0;
 
         int i = 0;
@@ -1124,8 +1431,9 @@ struct FitFileReaderState
                         time = value + qbase_time.toTime_t();
                         // Time MUST NOT go backwards
                         // You canny break the laws of physics, Jim
+
                         if (time < last_time)
-                            time = last_time;
+                            time = last_time; // Not true for Bryton
                         break;
                 case 3: // total elapsed time
                         length_duration = value / 1000.0;
@@ -1134,13 +1442,14 @@ struct FitFileReaderState
                         if (FIT_DEBUG) qDebug() << " total_timer_time:" << value;
                         break;
                 case 5: // total strokes
-                        if (FIT_DEBUG) qDebug() << " total_strokes:" << value;
+                        total_strokes = value;
                         break;
                 case 6: // avg speed
                         kph = value * 3.6 / 1000.0;
                         break;
-                case 7: // swim stroke
-                        if (FIT_DEBUG) qDebug() << " swim_stroke:" << value;
+                case 7: // swim stroke: 0-free, 1-back, 2-breast, 3-fly,
+                        //              4-drill, 5-mixed, 6-IM
+                        swim_stroke = value;
                         break;
                 case 9: // cadence
                         cad = value;
@@ -1158,6 +1467,15 @@ struct FitFileReaderState
                          unknown_record_fields.insert(field.num);
             }
         }
+
+        XDataPoint *p = new XDataPoint();
+        p->secs = last_time;
+        p->km = last_distance;
+        p->number[0] = length_type + swim_stroke;
+        p->number[1] = length_duration;
+        p->number[2] = total_strokes;
+
+        swimXdata->datapoints.append(p);
 
         // Rest interval
         if (!length_type) {
@@ -1255,11 +1573,9 @@ struct FitFileReaderState
                         break;
                 case 3:  // Wind heading (0deg=North)
                         windHeading = value ; // 180.0 * MATHCONST_PI;
-                        rideFile->setWindHeading(value / 180.0 * MATHCONST_PI);
                         break;
                 case 4:  // Wind speed (mm/s)
-                        windSpeed = value * 0.0036;
-                        rideFile->setWindSpeed(value * 0.0036);
+                        windSpeed = value * 0.0036; // km/h
                         break;
                 case 1:  // Temperature
                         temp = value;
@@ -1281,6 +1597,99 @@ struct FitFileReaderState
         p->number[3] = humidity;
 
         weatherXdata->datapoints.append(p);
+    }
+
+    void decodeHr(const FitDefinition &def, int time_offset,
+                      const std::vector<FitValue>& values) {
+        time_t time = 0;
+        if (time_offset > 0) {
+            time = last_time + time_offset;
+        }
+
+        QList<double> timestamps;
+        QList<double> hr;
+
+        int a = 0;
+        int j = 0;
+        foreach(const FitField &field, def.fields) {
+            FitValue value = values[a++];
+
+            if( value.type == SingleValue && value.v == NA_VALUE )
+                continue;
+
+            switch (field.num) {
+                case 253: // Timestamp
+                          time = value.v + qbase_time.toTime_t();
+                          break;
+                case 0:   // fractional_timestamp
+                          break;
+                case 1:	  // time256
+                          break;
+                case 6:	  // filtered_bpm
+                          if (value.type == SingleValue) {
+                            hr.append(value.v);
+                          }
+                          else {
+                              for (int i=0;i<value.list.size();i++) {
+                                  hr.append(value.list.at(i));
+                              }
+                          }
+                          break;
+
+                case 9:   // event_timestamp
+                          last_event_timestamp = value.v;
+                          start_timestamp = time-last_event_timestamp/1024.0;
+                          timestamps.append(last_event_timestamp/1024.0);
+                          break;
+                case 10:  // event_timestamp_12
+                          j=0;
+                          for (int i=0;i<value.list.size()-1;i++) {
+
+                              qint16 last_event_timestamp12 = last_event_timestamp & 0xFFF;
+                              qint16 next_event_timestamp12;
+
+                              if (j%2 == 0) {
+                                  next_event_timestamp12 = value.list.at(i) + ((value.list.at(i+1) & 0xF) << 8);
+                                  last_event_timestamp = (last_event_timestamp & 0xFFFFF000) + next_event_timestamp12;
+                              } else {
+                                  next_event_timestamp12 = 16 * value.list.at(i+1) + ((value.list.at(i) & 0xF0) >> 4);
+                                  last_event_timestamp = (last_event_timestamp & 0xFFFFF000) + next_event_timestamp12;
+                                  i++;
+                              }
+                              if (next_event_timestamp12 < last_event_timestamp12)
+                                  last_event_timestamp += 0x1000;
+
+                              timestamps.append(last_event_timestamp/1024.0);
+                              j++;
+                          }
+
+                          break;
+
+                default: ; // ignore it
+            }
+        }
+
+        for (int i=0;i<timestamps.count(); i++) {
+            double secs = round(timestamps.at(i) + start_timestamp - start_time);
+            if (secs>0) {
+                int idx = rideFile->timeIndex(round(secs));
+
+                if (rideFile->dataPoints().at(idx)->secs==secs)
+                    rideFile->appendOrUpdatePoint(
+                            secs, 0.0, hr.at(i),
+                            0.0,
+                            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                            0.0, 0.0, RideFile::NA, RideFile::NA,
+                            0.0, 0.0,
+                            0.0, 0.0,
+                            0.0, 0.0,
+                            0.0, 0.0,
+                            0.0, 0.0,
+                            0.0, 0.0,
+                            0.0, 0.0,
+                            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, false);
+            }
+        }
     }
 
     void decodeDeviceSettings(const FitDefinition &def, int time_offset,
@@ -1323,6 +1732,8 @@ struct FitFileReaderState
         double total_distance = 0.0;
 
         QString segment_name;
+        bool fail = false;
+
         foreach(const FitField &field, def.fields) {
             const FitValue& value = values[i++];
 
@@ -1388,6 +1799,10 @@ struct FitFileReaderState
                         printf("Found segment name: %s\n", segment_name.toStdString().c_str());
                     }
                     break;
+                case 64:  // status
+                    fail = (value.v == 1);
+                    break;
+
                 case 33:  /* undocumented, ignored */  break;
                 case 71:  /* undocumented, ignored */  break;
                 case 75:  /* undocumented, ignored */  break;
@@ -1425,7 +1840,6 @@ struct FitFileReaderState
                 case 61:  /* undocumented, ignored */  break;
                 case 62:  /* undocumented, ignored */  break;
                 case 63:  /* undocumented, ignored */  break;
-                case 64:  /* undocumented, ignored */  break;
                 case 65:  // Segment UID
                          // ignored
                         break;
@@ -1438,6 +1852,11 @@ struct FitFileReaderState
                 case 82:  /* undocumented, ignored */  break;
                 default: ; // ignore it
             }
+        }
+
+        if (fail) { // Segment started but not ended
+            // no interval
+            return;
         }
 
         if (this_start_time == 0 || this_start_time-start_time < 0) {
@@ -1464,6 +1883,114 @@ struct FitFileReaderState
 
     }
 
+    void decodeDeveloperFieldDescription(const FitDefinition &def, int time_offset,
+                      const std::vector<FitValue>& values) {
+        Q_UNUSED(time_offset);
+        int i = 0;
+
+        FitDeveField fieldDef;
+
+        foreach(const FitField &field, def.fields) {
+            FitValue value = values[i++];
+
+            //qDebug() << "deve : num" << field.num  << value.v << value.s.c_str();
+
+            switch (field.num) {
+                case 0:  // developer_data_index
+                        fieldDef.dev_id = value.v;
+                        break;
+                case 1:  // field_definition_number
+                        fieldDef.num = value.v;
+                        break;
+                case 2:  // fit_base_type_id
+                        fieldDef.type = value.v;
+                        break;
+                case 3:  // field_name
+                        fieldDef.name = value.s;
+                        break;
+                case 4:  // array
+                        break;
+                case 5:  // components
+                        break;
+                case 6:  // scale
+                        fieldDef.scale = value.v;
+                        break;
+                case 7:  // offset
+                        fieldDef.offset = value.v;
+                        break;
+                case 8:  // units
+                        fieldDef.unit = value.s;
+                        break;
+                case 9:  // bits
+                case 10: // accumulate
+                case 13: // fit_base_unit_id
+                case 14: // native_mesg_num
+                        break;
+                case 15: // native field number
+                        fieldDef.native = value.v;
+                default:
+                        // ignore it
+                        break;
+            }
+        }
+
+        //qDebug() << "num" << fieldDef.num << "deve_idx" << fieldDef.dev_id << "type" << fieldDef.type << "native" << fieldDef.native << "name" << fieldDef.name.c_str() << "unit" << fieldDef.unit.c_str() << "scale" << fieldDef.scale << "offset" << fieldDef.offset;
+        QString key = QString("%1.%2").arg(fieldDef.dev_id).arg(fieldDef.num);
+
+        if (!local_deve_fields.contains(key)) {
+            local_deve_fields.insert((key), fieldDef);
+        }
+
+        if (fieldDef.native > -1 && !record_deve_native_fields.values().contains(fieldDef.native)) {
+            record_deve_native_fields.insert(key, fieldDef.native);
+
+            RideFile::SeriesType series = getSeriesForNative(fieldDef.native);
+
+            if (series != RideFile::none) {
+                QString nativeName = rideFile->symbolForSeries(series);
+                xdataInfos.append(QString("STANDARD %1 : Field %2").arg(nativeName).arg(fieldDef.name.c_str()));
+            }
+        }
+    }
+
+    void read_header(bool &stop, QStringList &errors, int &data_size) {
+        stop = false;
+        try {
+            // read the header
+            int header_size = read_uint8();
+            if (header_size != 12 && header_size != 14) {
+                errors << QString("bad header size: %1").arg(header_size);
+                stop = true;
+            }
+            int protocol_version = read_uint8();
+            (void) protocol_version;
+
+            // if the header size is 14 we have profile minor then profile major
+            // version. We still don't do anything with this information
+            int profile_version = read_uint16(false); // always littleEndian
+            (void) profile_version;
+            //qDebug() << "profile_version" << profile_version/100.0; // not sure what to do with this
+
+            data_size = read_uint32(false); // always littleEndian
+            char fit_str[5];
+            if (file.read(fit_str, 4) != 4) {
+                errors << "truncated header";
+                stop = true;
+            }
+            fit_str[4] = '\0';
+            if (strcmp(fit_str, ".FIT") != 0) {
+                errors << QString("bad header, expected \".FIT\" but got \"%1\"").arg(fit_str);
+                stop = true;
+            }
+
+            // read the rest of the header
+            if (header_size == 14) read_uint16(false);
+        } catch (TruncatedRead &e) {
+            errors << "truncated file header";
+            stop = true;
+        }
+    }
+
     int read_record(bool &stop, QStringList &errors) {
         stop = false;
         int count = 0;
@@ -1471,6 +1998,7 @@ struct FitFileReaderState
         if (!(header_byte & 0x80) && (header_byte & 0x40)) {
             // Definition record
             int local_msg_type = header_byte & 0xf;
+            bool with_deve_data = (header_byte & 0x20) == 0x20 ;
 
             local_msg_types.insert(local_msg_type, FitDefinition());
             FitDefinition &def = local_msg_types[local_msg_type];
@@ -1481,6 +2009,8 @@ struct FitFileReaderState
             int num_fields = read_uint8(&count);
 
             if (FIT_DEBUG)  {
+                //qDebug() << "definition: local type=" << local_msg_type << "global=" << def.global_msg_num << "arch=" << def.is_big_endian << "fields=" << num_fields;
+
                 printf("definition: local type=%d global=%d arch=%d fields=%d\n",
                        local_msg_type, def.global_msg_num, def.is_big_endian,
                        num_fields );
@@ -1494,10 +2024,36 @@ struct FitFileReaderState
                 field.size = read_uint8(&count);
                 int base_type = read_uint8(&count);
                 field.type = base_type & 0x1f;
+                field.deve_idx = -1;
 
-                if (FIT_DEBUG)  {
+                if (FIT_DEBUG) {
                     printf("  field %d: %d bytes, num %d, type %d, size %d\n",
                            i, field.size, field.num, field.type, field.size );
+                }
+            }
+
+            if (with_deve_data) {
+
+                int num_fields = read_uint8(&count);
+
+                for (int i = 0; i < num_fields; ++i) {
+                    def.fields.push_back(FitField());
+                    FitField &field = def.fields.back();
+
+                    field.num = read_uint8(&count);
+                    field.size = read_uint8(&count);
+                    field.deve_idx = read_uint8(&count);
+
+                    QString key = QString("%1.%2").arg(field.deve_idx).arg(field.num);
+                    FitDeveField devField = local_deve_fields[key];
+                    field.type = devField.type & 0x1f;
+
+                    //qDebug() << "field" << field.num << "type" << field.type << "size" << field.size << "deve idx" << field.deve_idx;
+
+                    if (FIT_DEBUG) {
+                        printf("  field %d: %d bytes, num %d, type %d, size %d\n",
+                               i, field.size, field.num, field.type, field.size );
+                    }
                 }
             }
         }
@@ -1515,6 +2071,7 @@ struct FitFileReaderState
             }
 
             if (!local_msg_types.contains(local_msg_type)) {
+                printf( "local type %d without previous definition\n", local_msg_type );
                 errors << QString("local type %1 without previous definition").arg(local_msg_type);
                 stop = true;
                 return count;
@@ -1532,39 +2089,95 @@ struct FitFileReaderState
                 int size;
 
                 switch (field.type) {
-                    case 0: value.type = SingleValue; value.v = read_uint8(&count); size = 1; break;
+                    case 0: size = 1;
+                            if (field.size==size) {
+                                value.type = SingleValue; value.v = read_uint8(&count); size = 1;
+                             } else { // Multi-values
+                                value.type = ListValue;
+                                value.list.clear();
+                                for (int i=0;i<field.size/size;i++) {
+                                    value.list.append(read_uint8(&count));
+                                }
+                                size = field.size;
+                            }
+                            break;
                     case 1: value.type = SingleValue; value.v = read_int8(&count); size = 1;  break;
-                    case 2: value.type = SingleValue; value.v = read_uint8(&count); size = 1;
-                        // Multi-values ?
-                        if (field.size>size) {
-                            value.type = DoubleValue;
-                            value.v2 = read_uint8(&count);
-                            size = 2;
-                        }
-                        break;
+                    case 2: size = 1;
+                            if (field.size==size) {
+                                value.type = SingleValue; value.v = read_uint8(&count);
+                            } else { // Multi-values
+                                value.type = ListValue;
+                                value.list.clear();
+                                for (int i=0;i<field.size/size;i++) {
+                                    value.list.append(read_uint8(&count));
+                                }
+                                size = field.size;
+                            }
+                            break;
                     case 3: value.type = SingleValue; value.v = read_int16(def.is_big_endian, &count); size = 2;  break;
-                    case 4: value.type = SingleValue; value.v = read_uint16(def.is_big_endian, &count); size = 2;
-                        // Multi-values ?
-                        if (field.size>size) {
-                            value.type = DoubleValue;
-                            value.v2 = read_uint16(def.is_big_endian, &count);
-                            size = 4;
-                        }
-                        break;
+                    case 4: size = 2;
+                            if (field.size==size) {
+                                value.type = SingleValue; value.v = read_uint16(def.is_big_endian, &count);
+                            } else { // Multi-values
+                                value.type = ListValue;
+                                value.list.clear();
+                                for (int i=0;i<field.size/size;i++) {
+                                    value.list.append(read_uint16(def.is_big_endian, &count));
+                                }
+                                size = field.size;
+                            }
+                            break;
                     case 5: value.type = SingleValue; value.v = read_int32(def.is_big_endian, &count); size = 4;  break;
-                    case 6: value.type = SingleValue; value.v = read_uint32(def.is_big_endian, &count); size = 4;  break;
+                    case 6: size = 4;
+                            if (field.size==size) {
+                                value.type = SingleValue; value.v = read_uint32(def.is_big_endian, &count);
+                            } else { // Multi-values
+                                value.type = ListValue;
+                                value.list.clear();
+                                for (int i=0;i<field.size/size;i++) {
+                                    value.list.append(read_uint32(def.is_big_endian, &count));
+                                }
+                                size = field.size;
+                            }
+                            break;
                     case 7:
                         value.type = StringValue;
                         value.s = read_text(field.size, &count);
                         size = field.size;
                         break;
 
-                    //case 8: // FLOAT32
+                    case 8: // FLOAT32
+                        size = 4;
+                        value.type = FloatValue;
+                        value.f = read_float32(&count);
+                        size = field.size;
+
+                        break;
+
                     //case 9: // FLOAT64
-                    case 10: value.type = SingleValue; value.v = read_uint8z(&count); size = 1; break;
+
+                    case 10: size = 1;
+                             if (field.size==size) {
+                                value.type = SingleValue; value.v = read_uint8z(&count); size = 1;
+                             } else { // Multi-values
+                                 value.type = ListValue;
+                                 value.list.clear();
+                                 for (int i=0;i<field.size/size;i++) {
+                                     value.list.append(read_uint8z(&count));
+                                 }
+                                 size = field.size;
+                             }
+                             break;
                     case 11: value.type = SingleValue; value.v = read_uint16z(def.is_big_endian, &count); size = 2; break;
                     case 12: value.type = SingleValue; value.v = read_uint32z(def.is_big_endian, &count); size = 4; break;
-                    //case 13: // BYTE
+                    case 13: // BYTE
+                             value.type = ListValue;
+                             value.list.clear();
+                             for (int i=0;i<field.size;i++) {
+                                value.list.append(read_uint8(&count));
+                             }
+                             size = value.list.size();
+                             break;
 
                     // we may need to add support for float, string + byte base types here
                     default:
@@ -1577,13 +2190,13 @@ struct FitFileReaderState
                         read_unknown( field.size, &count );
                         value.type = SingleValue;
                         value.v = NA_VALUE;
-                        unknown_base_type.insert(field.num);
+                        unknown_base_type.insert(field.type);
                         size = field.size;
                 }
-                // Quick fix : we need to support multivalues
+                // Size is greater than expected
                 if (size < field.size) {
                     if (FIT_DEBUG)  {
-                         printf( "   warning : size=%d for size=%d (num=%d)\n",
+                         printf( "   warning : size=%d for type=%d (num=%d)\n",
                                  field.size, field.type, field.num);
                     }
                     read_unknown( field.size-size, &count );
@@ -1591,15 +2204,27 @@ struct FitFileReaderState
 
                 values.push_back(value);
 
-                if (FIT_DEBUG)  {
-                    printf( " field: type=%d num=%d ",
-                        field.type, field.num);
-                    if (value.type == SingleValue)
-                        printf( "value=%lld\n", value.v );
-                    else if (value.type == DoubleValue)
-                        printf( "value=%lld value2=%lld\n", value.v, value.v2 );
+                if (FIT_DEBUG) {
+                    printf( " field: type=%d num=%d size=%d(%d) ",
+                        field.type, field.num, field.size, size);
+                    if (value.type == SingleValue) {
+                        if (value.v == NA_VALUE)
+                            printf( "value=NA\n");
+                        else
+                            printf( "value=%lld\n", value.v );
+                    }
                     else if (value.type == StringValue)
                         printf( "value=%s\n", value.s.c_str() );
+                    else if (value.type == ListValue) {
+                        printf( "values=");
+                        for (int i=0;i<value.list.count();i++) {
+                            if (value.v == NA_VALUE)
+                                printf( "NA,");
+                            else
+                                printf( "%lld,", value.list.at(i) );
+                        }
+                        printf( "\n");
+                    }
                 }
             }
             // Most of the record types in the FIT format aren't actually all
@@ -1626,6 +2251,17 @@ struct FitFileReaderState
                 case 128:
                     decodeWeather(def, time_offset, values);
                     break; /* weather broadcast */
+                case 132:
+                    decodeHr(def, time_offset, values); /* HR */
+                    break;
+                case SEGMENT_TYPE: // #142
+                    decodeSegment(def, time_offset, values); /* segment data */
+                    break;
+
+                case 206: // Developer Field Description
+                    decodeDeveloperFieldDescription(def, time_offset, values);
+                    break;
+
 
                 case 1: /* capabilities, device settings and timezone */ break;
                 case 2: decodeDeviceSettings(def, time_offset, values); break;
@@ -1675,10 +2311,6 @@ struct FitFileReaderState
 
                 case 140: /* unknown */
                 case 141: /* unknown */
-                    break;
-                case SEGMENT_TYPE: // #142
-                    decodeSegment(def, time_offset, values); /* segment data */
-                    break;
                 case 145: /* memo glob */
                 case 147: /* equipment (undocumented) = sensors presets (sensor name, wheel circumference, etc.)  ; see details below: */
                           /* #0: equipment ID / #2: equipment name / #10: default wheel circ. value / #21: user wheel circ. value / #254: local eqt idx */
@@ -1690,8 +2322,8 @@ struct FitFileReaderState
                            / #3: ID of source garmin connect activity (uint32) ? OR ? timestamp ? / #4: time to finish (ms) / #254: message counter idx */
                 case 150: /* segment trackpoint (undocumented) ; see details below: */
                           /* #1: latitude / #2: longitude / #3: distance from start point / #4: elevation / #5: timer since start (ms) / #6: message counter index */
+                case 207: /* Developer ID */
                     break;
-
                 default:
                     unknown_global_msg_nums.insert(def.global_msg_num);
             }
@@ -1710,8 +2342,6 @@ struct FitFileReaderState
         // start
         rideFile = new RideFile;
         rideFile->setDeviceType("Garmin FIT");
-        rideFile->setWindHeading(0.0);
-        rideFile->setWindSpeed(0.0);
         rideFile->setRecIntSecs(1.0); // this is a terrible assumption!
         if (!file.open(QIODevice::ReadOnly)) {
             delete rideFile;
@@ -1722,65 +2352,51 @@ struct FitFileReaderState
         weatherXdata = new XDataSeries();
         weatherXdata->name = "WEATHER";
         weatherXdata->valuename << "WINDSPEED";
+        weatherXdata->unitname << "kph";
         weatherXdata->valuename << "WINDHEADING";
+        weatherXdata->unitname << "";
         weatherXdata->valuename << "TEMPERATURE";
+        weatherXdata->unitname << "C";
         weatherXdata->valuename << "HUMIDITY";
+        weatherXdata->unitname << "relative humidity";
 
-        try {
+        swimXdata = new XDataSeries();
+        swimXdata->name = "SWIM";
+        swimXdata->valuename << "TYPE";
+        swimXdata->unitname << "stroketype";
+        swimXdata->valuename << "DURATION";
+        swimXdata->unitname << "secs";
+        swimXdata->valuename << "STROKES";
+        swimXdata->unitname << "";
 
-            // read the header
-            int header_size = read_uint8();
-            if (header_size != 12 && header_size != 14) {
-                errors << QString("bad header size: %1").arg(header_size);
-                file.close();
-                delete rideFile;
-                return NULL;
-            }
-            int protocol_version = read_uint8();
-            (void) protocol_version;
+        deveXdata = new XDataSeries();
+        deveXdata->name = "DEVELOPER";
 
-            // if the header size is 14 we have profile minor then profile major
-            // version. We still don't do anything with this information
-            int profile_version = read_uint16(false); // always littleEndian
-            (void) profile_version; // not sure what to do with this
+        extraXdata = new XDataSeries();
+        extraXdata->name = "EXTRA";
 
-            data_size = read_uint32(false); // always littleEndian
-            char fit_str[5];
-            if (file.read(fit_str, 4) != 4) {
-                errors << "truncated header";
-                file.close();
-                delete rideFile;
-                return NULL;
-            }
-            fit_str[4] = '\0';
-            if (strcmp(fit_str, ".FIT") != 0) {
-                errors << QString("bad header, expected \".FIT\" but got \"%1\"").arg(fit_str);
-                file.close();
-                delete rideFile;
-                return NULL;
-            }
-
-            // read the rest of the header
-            if (header_size == 14) read_uint16(false);
-
-        } catch (TruncatedRead &e) {
-            errors << "truncated file body";
-            return NULL;
-        }
-
-        int bytes_read = 0;
         bool stop = false;
         bool truncated = false;
-        try {
-            while (!stop && (bytes_read < data_size))
-                bytes_read += read_record(stop, errors);
-        }
-        catch (TruncatedRead &e) {
-            errors << "truncated file body";
-            //file.close();
-            //delete rideFile;
-            //return NULL;
-            truncated = true;
+
+        // read the header
+        read_header(stop, errors, data_size);
+
+        if (!stop) {
+
+            int bytes_read = 0;
+
+            try {
+                while (!stop && (bytes_read < data_size)) {
+                    bytes_read += read_record(stop, errors);
+                }
+            }
+            catch (TruncatedRead &e) {
+                errors << "truncated file body";
+                //file.close();
+                //delete rideFile;
+                //return NULL;
+                truncated = true;
+            }
         }
         if (stop) {
             file.close();
@@ -1797,6 +2413,39 @@ struct FitFileReaderState
                     errors << "truncated file body";
                     return NULL;
                 }
+
+                // second file ?
+                try {
+                    while (file.canReadLine()) {
+                        read_header(stop, errors, data_size);
+                        if (!stop) {
+
+                            int bytes_read = 0;
+
+                            try {
+                                while (!stop && (bytes_read < data_size)) {
+                                    bytes_read += read_record(stop, errors);
+                                }
+                            }
+                            catch (TruncatedRead &e) {
+                                errors << "truncated second file body";
+                            }
+                        }
+                        if (!truncated) {
+                            try {
+                                int crc = read_uint16( false ); // always littleEndian
+                                (void) crc;
+                            }
+                            catch (TruncatedRead &e) {
+                                errors << "truncated file body";
+                                return NULL;
+                            }
+                        }
+                    }
+                }
+                catch (TruncatedRead &e) {
+                }
+
             }
 
             foreach(int num, unknown_global_msg_nums)
@@ -1806,12 +2455,38 @@ struct FitFileReaderState
             foreach(int num, unknown_base_type)
                 qDebug() << QString("FitRideFile: unknown base type %1; skipped").arg(num);
 
+            QString deviceInfo;
+            foreach(QString info, deviceInfos) {
+                deviceInfo += info + "\n";
+            }
+            if (deviceInfo.length()>0 && xdataInfos.count()>0)
+                 deviceInfo += "\n";
+            foreach(QString info, xdataInfos) {
+                deviceInfo += info + "\n";
+            }
+            rideFile->setTag("Device Info", deviceInfo);
+
             file.close();
 
             if (weatherXdata->datapoints.count()>0)
                 rideFile->addXData("WEATHER", weatherXdata);
             else
                 delete weatherXdata;
+
+            if (swimXdata->datapoints.count()>0)
+                rideFile->addXData("SWIM", swimXdata);
+            else
+                delete swimXdata;
+
+            if (deveXdata->datapoints.count()>0)
+                rideFile->addXData("DEVELOPER", deveXdata);
+            else
+                delete deveXdata;
+
+            if (extraXdata->datapoints.count()>0)
+                rideFile->addXData("EXTRA", extraXdata);
+            else
+                delete extraXdata;
 
             return rideFile;
         }

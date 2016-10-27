@@ -162,6 +162,7 @@ class RideFile : public QObject // QObject to emit signals
         friend class RideItem; // derived/wbal stale
         friend class IntervalItem; // access intervals 
         friend class MainWindow; // tells us we were modified
+        friend class ComparePane;
         friend class Context; // tells us we were saved
         friend class Athlete; // tells us we were saved
 
@@ -179,6 +180,8 @@ class RideFile : public QObject // QObject to emit signals
         friend class SplitActivityWizard;
         friend class SplitConfirm;
         friend class SplitSelect;
+        // fix tools
+        friend class FixLapSwim;
 
         // utility
         static unsigned int computeFileCRC(QString); 
@@ -202,16 +205,19 @@ class RideFile : public QObject // QObject to emit signals
                           aPower, wprime, aTISS, anTISS, smo2, thb, 
                           rvert, rcad, rcontact, gear, o2hb, hhb,
                           lpco, rpco, lppb, rppb, lppe, rppe, lpppb, rpppb, lpppe, rpppe,
-                          wbal, tcore,
+                          wbal, tcore, clength, index,
                           none }; // none must ALWAYS be last
+        typedef enum seriestype SeriesType;
 
         enum conversion { original, pace };
+
+        enum xdatajoin { REPEAT, SPARSE, INTERPOLATE, RESAMPLE };
+        typedef enum xdatajoin XDataJoin;
 
         // NA = Not Applicable - i.e Temperature no recorded value
         // NIL = Not available, but still set to zero for compatibility
         //       We should consider looking at code to handle NIL / NA 
         enum specialValues { NA = -255, NIL = 0 };
-        typedef enum seriestype SeriesType;
         typedef enum conversion Conversion;
         static SeriesType lastSeriesType() { return none; }
 
@@ -252,7 +258,22 @@ class RideFile : public QObject // QObject to emit signals
                          double rvert, double rcad, double rcontact, double tcore,
                          int interval);
 
+        void appendOrUpdatePoint(double secs, double cad, double hr, double km,
+                                 double kph, double nm, double watts, double alt,
+                                 double lon, double lat, double headwind, double slope,
+                                 double temperature, double lrbalance,
+                                 double lte, double rte, double lps, double rps,
+                                 double lpco, double rpco,
+                                 double lppb, double rppb, double lppe, double rppe,
+                                 double lpppb, double rpppb, double lpppe, double rpppe,
+                                 double smo2, double thb,
+                                 double rvert, double rcad, double rcontact, double tcore,
+                                 int interval, bool forceAppend);
+
         void appendPoint(const RideFilePoint &);
+
+        void updatePoint(RideFilePoint *point, const RideFilePoint *oldPoint);
+
         const QVector<RideFilePoint*> &dataPoints() const { return dataPoints_; }
 
         // recalculate all the derived data series
@@ -328,9 +349,10 @@ class RideFile : public QObject // QObject to emit signals
         WPrime *wprimeData(); // return wprime, init/refresh if needed
 
         // XDATA
-        XDataSeries *xdata(QString name);
+        XDataSeries *xdata(QString name) { return xdata_.value(name, NULL); }
         void addXData(QString name, XDataSeries *series);
-        const QMap<QString,XDataSeries*> &xdata() const { return xdata_; }
+        QMap<QString,XDataSeries*> &xdata() { return xdata_; }
+        double xdataValue(RideFilePoint *p, int &idx, QString xdata, QString series, RideFile::XDataJoin);
 
         // METRIC OVERRIDES
         QMap<QString,QMap<QString,QString> > metricOverrides;
@@ -353,12 +375,10 @@ class RideFile : public QObject // QObject to emit signals
         void insertPoint(int index, RideFilePoint *point);
         void appendPoints(QVector <struct RideFilePoint *> newRows);
         void setDataPresent(SeriesType, bool);
+        void insertXDataPoint(QString xdata, int index, XDataPoint *point);
+        void deleteXDataPoints(QString xdata, int index, int count);
+        void appendXDataPoints(QString xdata, QVector<XDataPoint *> points);
         // ************************************************************
-
-        const double &windSpeed() const { return windSpeed_; }
-        void setWindSpeed(const double &value) {windSpeed_ = value; }
-        const double &windHeading() const { return windHeading_; }
-        void setWindHeading(const double &value) {windHeading_ = value; }
 
     signals:
         void saved();
@@ -370,6 +390,10 @@ class RideFile : public QObject // QObject to emit signals
 
         //  should access via IntervalItem
         const QList<RideFileInterval*> &intervals() const { return intervals_; }
+
+        // xdata series
+        QMap<QString, XDataSeries*> xdata_;
+
         void clearIntervals();
         void fillInIntervals();
 
@@ -408,9 +432,6 @@ class RideFile : public QObject // QObject to emit signals
 
         bool dstale; // is derived data up to date?
 
-        // xdata series
-        QMap<QString, XDataSeries*> xdata_;
-
         // data required to compute headwind based on weather broadcast
         double windSpeed_, windHeading_;
 };
@@ -442,7 +463,7 @@ struct RideFilePoint
 
     // derived data (we calculate it)
     // xPower, normalised power, aPower
-    double xp, np, apower, atiss, antiss, gear, hhb, o2hb;
+    double xp, np, apower, atiss, antiss, gear, hhb, o2hb, clength;
 
     // create blank point
     RideFilePoint() : secs(0.0), cad(0.0), hr(0.0), km(0.0), kph(0.0), nm(0.0), 
@@ -515,12 +536,13 @@ class RideFileIterator {
         int start, stop, index;
 };
 
-// each sample has up to 8 strings or values
+#define XDATA_MAXVALUES 32
+
 class XDataPoint {
 public:
     XDataPoint() {
         secs=km=0;
-        for(int i=0; i<8; i++) {
+        for(int i=0; i<XDATA_MAXVALUES; i++) {
             number[i]=0;
             string[i]="";
         }
@@ -528,23 +550,36 @@ public:
     XDataPoint (const XDataPoint &other) {
         this->secs=other.secs;
         this->km=other.km;
-        for(int i=0; i<8; i++) {
+        for(int i=0; i<XDATA_MAXVALUES; i++) {
             this->number[i]= other.number[i];
             this->string[i]= other.string[i];
         }
     }
 
     double secs, km;
-    double number[8];
-    QString string[8];
+    double number[XDATA_MAXVALUES];
+    QString string[XDATA_MAXVALUES];
 };
 
 class XDataSeries {
 public:
+    XDataSeries() {}
+    XDataSeries(XDataSeries &other) {
+        name = other.name;
+        valuename = other.valuename;
+        unitname = other.unitname;
+        valuetype = other.valuetype;
+        datapoints = other.datapoints;
+    }
+
     ~XDataSeries() { foreach(XDataPoint *p, datapoints) delete p; }
+
+    int timeIndex(double) const;          // get index offset for time in secs
 
     QString name;
     QStringList valuename;
+    QStringList unitname;
+    QList<RideFile::SeriesType> valuetype;
     QVector<XDataPoint*> datapoints;
 };
 

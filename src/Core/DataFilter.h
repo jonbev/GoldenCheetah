@@ -49,9 +49,10 @@ class Result {
         bool isNumber;           // if true, value is numeric
         QString string;
         double number;
-        QList<double> vector;
+        QVector<double> vector;
 };
 
+class DataFilterRuntime;
 class Leaf {
     Q_DECLARE_TR_FUNCTIONS(Leaf)
 
@@ -71,7 +72,7 @@ class Leaf {
         Result eval(DataFilterRuntime *df, Leaf *, float x, RideItem *m, RideFilePoint *p = NULL, const QHash<QString,RideMetric*> *metrics=NULL);
 
         // tree traversal etc
-        void print(Leaf *, int level);  // print leaf and all children
+        void print(Leaf *, int level, DataFilterRuntime*);  // print leaf and all children
         void color(Leaf *, QTextDocument *);  // update the document to match
         bool isDynamic(Leaf *);
         void validateFilter(Context *context, DataFilterRuntime *, Leaf*); // validate
@@ -82,7 +83,7 @@ class Leaf {
 
         enum { none, Float, Integer, String, Symbol, 
                Logical, Operation, BinaryOperation, UnaryOperation,
-               Function, Conditional, Vector,
+               Function, Conditional, Vector, Index,
                Parameters, Compound } type;
 
         union value {
@@ -103,6 +104,7 @@ class Leaf {
         RideFile::SeriesType seriesType; // for ridefilecache
         int loc, leng;
         bool inerror;
+        RideFile::XDataJoin xjoin; // how to join xdata with main
 };
 
 class DataFilterRuntime {
@@ -134,6 +136,8 @@ public:
 
     // user defined functions
     QHash<QString, Leaf*> functions;
+
+    QHash<Leaf*, int> indexes;
 
     // pd models for estimates
     QList <PDModel*>models;

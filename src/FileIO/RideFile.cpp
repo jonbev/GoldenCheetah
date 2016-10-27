@@ -120,6 +120,7 @@ RideFile::~RideFile()
         XDataSeries *p = it.value();
         delete p;
     }
+    xdata_.clear();
     //!!! if (data) delete data; // need a mechanism to notify the editor
 }
 
@@ -158,7 +159,8 @@ RideFile::updateDataTag()
     else flags += '-';
     if (areDataPresent()->hr) flags += 'H'; // Heartrate
     else flags += '-';
-    if (areDataPresent()->cad) flags += 'C'; // cadence
+    if (areDataPresent()->cad ||
+        areDataPresent()->rcad) flags += 'C'; // cadence
     else flags += '-';
     if (areDataPresent()->nm) flags += 'N'; // Torque
     else flags += '-';
@@ -271,6 +273,7 @@ RideFile::seriesName(SeriesType series, bool compat)
         case RideFile::rcad: return QString("rcad");
         case RideFile::rcontact: return QString("gct");
         case RideFile::gear: return QString("gearratio");
+        case RideFile::index: return QString("index");
         default: return QString("unknown");
         }
     } else {
@@ -326,6 +329,7 @@ RideFile::seriesName(SeriesType series, bool compat)
         case RideFile::rcontact: return QString(tr("GCT"));
         case RideFile::gear: return QString(tr("Gear Ratio"));
         case RideFile::wbal: return QString(tr("W' Consumed"));
+        case RideFile::index: return QString(tr("Sample Index"));
         default: return QString(tr("Unknown"));
         }
     }
@@ -472,7 +476,7 @@ RideFile::fillInIntervals()
     if (dataPoints_.empty())
         return;
     intervals_.clear();
-    double start = 0.0;
+    double start = dataPoints().first()->secs;
     int interval = dataPoints().first()->interval;
     const RideFilePoint *point=NULL, *previous=NULL;
     foreach (point, dataPoints()) {
@@ -854,6 +858,89 @@ QStringList RideFileFactory::listRideFiles(const QDir &dir) const
     return dir.entryList(filters, spec, QDir::Name);
 }
 
+double
+RideFile::xdataValue(RideFilePoint *p, int &idx, QString sxdata, QString series, RideFile::XDataJoin xjoin)
+{
+    double returning = RideFile::NA;
+    XDataSeries *s = xdata(sxdata);
+
+    // if not there or no values return NA
+    if (s == NULL || !s->valuename.contains(series) || s->datapoints.count()==0)
+        return RideFile::NA;
+
+    // get index of series we care about
+    int vindex = s->valuename.indexOf(series);
+
+    // where are we in the ride?
+    double secs = p->secs;
+
+    // do we need to move on?
+    while (idx < s->datapoints.count() && s->datapoints[idx]->secs < secs)
+        idx++;
+
+    // so at this point we are looking at a point that is either
+    // the same point as us or is ahead of us
+
+    if (idx >= s->datapoints.count()) {
+        //
+        // PAST LAST XDATA
+        //
+
+        // return the last value we saw
+        switch(xjoin) {
+        case INTERPOLATE:
+        case SPARSE:
+        case RESAMPLE:
+            returning = RideFile::NIL;
+            break;
+
+        case REPEAT:
+            if (idx) returning = s->datapoints[idx-1]->number[vindex];
+            else  returning = RideFile::NIL;
+            break;
+        }
+
+    } else if (fabs(s->datapoints[idx]->secs - secs) < recIntSecs()) {
+        //
+        // ITS THE SAME AS US!
+        //
+        // if its a match we always take the value
+        returning = s->datapoints[idx]->number[vindex];
+    } else {
+        //
+        // ITS IN THE FUTURE
+        //
+
+        switch(xjoin) {
+        case INTERPOLATE:
+            if (idx) {
+                // interpolate then
+                double gap = s->datapoints[idx]->secs - s->datapoints[idx-1]->secs;
+                double diff = secs - s->datapoints[idx-1]->secs;
+                double ratio = diff/gap;
+                double vgap = s->datapoints[idx]->number[vindex] - s->datapoints[idx-1]->number[vindex];
+                returning = s->datapoints[idx-1]->number[vindex] + (vgap * ratio);
+            }
+            break;
+
+        case SPARSE:
+            returning = RideFile::NIL;
+            break;
+
+        case RESAMPLE:
+            returning = RideFile::NIL;
+            break;
+
+        case REPEAT:
+            // for now, just return the last value we saw
+            if (idx) returning = s->datapoints[idx-1]->number[vindex];
+            else  returning = RideFile::NA;
+            break;
+        }
+    }
+    return returning;
+}
+
 void RideFile::updateMin(RideFilePoint* point)
 {
     // MIN
@@ -1098,7 +1185,7 @@ void RideFile::updateAvg(RideFilePoint* point)
 void RideFile::appendPoint(double secs, double cad, double hr, double km,
                            double kph, double nm, double watts, double alt,
                            double lon, double lat, double headwind,
-                           double slope, double temp, double lrbalance, 
+                           double slope, double temp, double lrbalance,
                            double lte, double rte, double lps, double rps,
                            double lpco, double rpco,
                            double lppb, double rppb, double lppe, double rppe,
@@ -1106,6 +1193,31 @@ void RideFile::appendPoint(double secs, double cad, double hr, double km,
                            double smo2, double thb,
                            double rvert, double rcad, double rcontact, double tcore,
                            int interval)
+{
+    appendOrUpdatePoint(secs,cad,hr,km,kph,
+                nm,watts,alt,lon,lat,
+                headwind, slope,
+                temp, lrbalance,
+                lte, rte, lps, rps,
+                lpco, rpco,
+                lppb, rppb, lppe, rppe,
+                lpppb, rpppb, lpppe, rpppe,
+                smo2, thb,
+                rvert, rcad, rcontact, tcore,
+                interval, true);
+}
+
+void RideFile::appendOrUpdatePoint(double secs, double cad, double hr, double km,
+                           double kph, double nm, double watts, double alt,
+                           double lon, double lat, double headwind,
+                           double slope, double temp, double lrbalance, 
+                           double lte, double rte, double lps, double rps,
+                           double lpco, double rpco,
+                           double lppb, double rppb, double lppe, double rppe,
+                           double lpppb, double rpppb, double lpppe, double rpppe,
+                           double smo2, double thb,
+                           double rvert, double rcad, double rcontact, double tcore,
+                           int interval, bool forceAppend)
 {
     // negative values are not good, make them zero
     // although alt, lat, lon, headwind, slope and temperature can be negative of course!
@@ -1173,7 +1285,7 @@ void RideFile::appendPoint(double secs, double cad, double hr, double km,
     //                                 point on Earth (Mt Everest).
     if (alt > RideFile::maximumFor(RideFile::alt)) alt = RideFile::maximumFor(RideFile::alt);
 
-    RideFilePoint* point = new RideFilePoint(secs, cad, hr, km, kph, nm, watts, alt, lon, lat, 
+    RideFilePoint* point = new RideFilePoint(secs, cad, hr, km, kph, nm, watts, alt, lon, lat,
                                              headwind, slope, temp,
                                              lrbalance,
                                              lte, rte, lps, rps,
@@ -1183,7 +1295,37 @@ void RideFile::appendPoint(double secs, double cad, double hr, double km,
                                              smo2, thb,
                                              rvert, rcad, rcontact, tcore,
                                              interval);
-    dataPoints_.append(point);
+
+    if (!forceAppend) {
+        int idx = timeIndex(secs);
+        if (idx != -1) {
+            if (dataPoints_.at(idx)->secs == secs) {
+                updatePoint(point, dataPoints_.at(idx));
+                dataPoints_.replace(idx, point);
+            } else {
+                if (dataPoints_.at(idx)->secs > secs)
+                    dataPoints_.insert(idx, point);
+                else
+                    dataPoints_.insert(idx+1, point);
+            }
+        } else
+           forceAppend = true;
+    }
+
+    if (forceAppend) {
+        RideFilePoint* point = new RideFilePoint(secs, cad, hr, km, kph, nm, watts, alt, lon, lat,
+                                                 headwind, slope, temp,
+                                                 lrbalance,
+                                                 lte, rte, lps, rps,
+                                                 lpco, rpco,
+                                                 lppb, rppb, lppe, rppe,
+                                                 lpppb, rpppb, lpppe, rpppe,
+                                                 smo2, thb,
+                                                 rvert, rcad, rcontact, tcore,
+                                                 interval);
+
+        dataPoints_.append(point);
+    }
 
     dataPresent.secs     |= (secs != 0);
     dataPresent.cad      |= (cad != 0);
@@ -1239,6 +1381,87 @@ void RideFile::appendPoint(const RideFilePoint &point)
                 point.smo2, point.thb,
                 point.rvert, point.rcad, point.rcontact, point.tcore,
                 point.interval);
+}
+
+void
+RideFile::updatePoint(RideFilePoint *point, const RideFilePoint *oldPoint){
+    if (point->cad == 0 && oldPoint->cad != 0)
+        point->cad = oldPoint->cad;
+    if (point->hr == 0 && oldPoint->hr != 0)
+        point->hr = oldPoint->hr;
+    if (point->km == 0 && oldPoint->km != 0)
+        point->km = oldPoint->km;
+    if (point->kph == 0 && oldPoint->kph != 0)
+        point->kph = oldPoint->kph;
+
+    if (point->nm == 0 && oldPoint->nm != 0)
+        point->nm = oldPoint->nm;
+    if (point->watts == 0 && oldPoint->watts != 0)
+        point->watts = oldPoint->watts;
+    if (point->alt == 0 && oldPoint->alt != 0)
+        point->alt = oldPoint->alt;
+    if (point->lat == 0 && oldPoint->lat != 0)
+        point->lat = oldPoint->lat;
+    if (point->lon == 0 && oldPoint->lon != 0)
+        point->lon = oldPoint->lon;
+
+    if (point->headwind == 0 && oldPoint->headwind != 0)
+        point->headwind = oldPoint->headwind;
+    if (point->slope == 0 && oldPoint->slope != 0)
+        point->slope = oldPoint->slope;
+    if (point->temp == RideFile::NA && oldPoint->temp != RideFile::NA)
+        point->temp = oldPoint->temp;
+    if (point->lrbalance == RideFile::NA && oldPoint->lrbalance != RideFile::NA)
+        point->lrbalance = oldPoint->lrbalance;
+
+    if (point->lte == 0 && oldPoint->lte != 0)
+        point->lte = oldPoint->lte;
+    if (point->rte == 0 && oldPoint->rte != 0)
+        point->rte = oldPoint->rte;
+    if (point->lps == 0 && oldPoint->lps != 0)
+        point->lps = oldPoint->lps;
+    if (point->rps == 0 && oldPoint->rps != 0)
+        point->rps = oldPoint->rps;
+
+    if (point->lpco == 0 && oldPoint->lpco != 0)
+        point->lpco = oldPoint->lpco;
+    if (point->rpco == 0 && oldPoint->rpco != 0)
+        point->rpco = oldPoint->rpco;
+
+    if (point->lppb == 0 && oldPoint->lppb != 0)
+        point->lppb = oldPoint->lppb;
+    if (point->rppb == 0 && oldPoint->rppb != 0)
+        point->rppb = oldPoint->rppb;
+    if (point->lppe == 0 && oldPoint->lppe != 0)
+        point->lppe = oldPoint->lppe;
+    if (point->rppe == 0 && oldPoint->rppe != 0)
+        point->rppe = oldPoint->rppe;
+
+    if (point->lpppb == 0 && oldPoint->lpppb != 0)
+        point->lpppb = oldPoint->lpppb;
+    if (point->rpppb == 0 && oldPoint->rpppb != 0)
+        point->rpppb = oldPoint->rpppb;
+    if (point->lpppe == 0 && oldPoint->lpppe != 0)
+        point->lpppe = oldPoint->lpppe;
+    if (point->rpppe == 0 && oldPoint->rpppe != 0)
+        point->rpppe = oldPoint->rpppe;
+
+    if (point->smo2 == 0 && oldPoint->smo2 != 0)
+        point->smo2 = oldPoint->smo2;
+    if (point->thb == 0 && oldPoint->thb != 0)
+        point->thb = oldPoint->thb;
+
+    if (point->rvert == 0 && oldPoint->rvert != 0)
+        point->rvert = oldPoint->rvert;
+    if (point->rcad == 0 && oldPoint->rcad != 0)
+        point->rcad = oldPoint->rcad;
+    if (point->rcontact == 0 && oldPoint->rcontact != 0)
+        point->rcontact = oldPoint->rcontact;
+    if (point->tcore == 0 && oldPoint->tcore != 0)
+        point->tcore = oldPoint->tcore;
+
+    if (point->interval == 0 && oldPoint->interval != 0)
+        point->interval = oldPoint->interval;
 }
 
 void
@@ -1741,9 +1964,30 @@ RideFile::insertPoint(int index, RideFilePoint *point)
 }
 
 void
+RideFile::insertXDataPoint(QString _xdata, int index, XDataPoint *point)
+{
+    XDataSeries *series = xdata(_xdata);
+    if (series)  series->datapoints.insert(index, point);
+}
+
+void
+RideFile::deleteXDataPoints(QString _xdata, int index, int count)
+{
+    XDataSeries *series = xdata(_xdata);
+    if (series) series->datapoints.remove(index, count);
+}
+
+void
 RideFile::appendPoints(QVector <struct RideFilePoint *> newRows)
 {
     dataPoints_ += newRows;
+}
+
+void
+RideFile::appendXDataPoints(QString _xdata, QVector<XDataPoint *> points)
+{
+    XDataSeries *series = xdata(_xdata);
+    if (series) series->datapoints << points;
 }
 
 void
@@ -2155,6 +2399,31 @@ RideFile::recalculateDerivedSeries(bool force)
 
                 p->o2hb = p->hhb = 0;
             }
+        }
+
+        // can we derive cycle length ?
+        // needs speed and cadence
+        if (p->kph && (p->cad || p->rcad)) {
+            // need to say we got it
+            setDataPresent(RideFile::clength, true);
+
+            //  only if ride point has cadence and speed > 0
+            if ((p->cad > 0.0f  || p->rcad > 0.0f ) && p->kph > 0.0f) {
+                double cad = p->rcad;
+                if (cad == 0)
+                    cad = p->cad;
+
+                p->clength = (1000.00f * p->kph) / (cad * 60.00f);
+
+                // rounding to 2 decimals
+                p->clength = round(p->clength * 100.00f) / 100.00f;
+            }
+            else {
+                p->clength = 0.0f; // to be filled up with previous gear later
+            }
+
+        } else {
+            p->clength = 0.0f;
         }
 
         // last point
@@ -2762,7 +3031,7 @@ static struct {
     QString symbol;
     RideFile::SeriesType series;
 } seriesSymbolTable[] = {
-
+    { "INDEX", RideFile::index },
 	{ "SECS", RideFile::secs },
 	{ "CADENCE", RideFile::cad },
 	{ "CADENCED", RideFile::cadd },
@@ -2919,4 +3188,24 @@ RideFileIterator::previous()
 {
     if (index >= 0 && index >= start) return f->dataPoints()[index--];
     else return NULL;
+}
+
+struct CompareXDataPointSecs {
+    bool operator()(const XDataPoint *p1, const XDataPoint *p2) {
+        return p1->secs < p2->secs;
+    }
+};
+
+int
+XDataSeries::timeIndex(double secs) const
+{
+    // return index offset for specified time
+    XDataPoint p;
+    p.secs = secs;
+
+    QVector<XDataPoint*>::const_iterator i = std::lower_bound(
+        datapoints.begin(), datapoints.end(), &p, CompareXDataPointSecs());
+    if (i == datapoints.end())
+        return datapoints.size()-1;
+    return i - datapoints.begin();
 }

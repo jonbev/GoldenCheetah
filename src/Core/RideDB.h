@@ -38,8 +38,9 @@
 // 1.3      27 Jun 15  Mark Liversedge         rationalised all the discovery intervals
 // 1.4       5 Sep 15  Mark Liversedge         overrides_ in RideItem
 // 1.5      15 Dec 15  Mark Liversedge         zone ranges added as part of metric compute() refactor
+// 1.6      16 Jul 16  Mark Liversedge         xdata added
 
-#define RIDEDB_VERSION "1.5"
+#define RIDEDB_VERSION "1.6"
 
 class APIWebService;
 class HttpResponse;
@@ -67,6 +68,7 @@ struct RideDBContext {
 
     // term state data is held in these variables
     QString JsonString;
+    QStringList JsonStringList;
     QString key, value;
     QStringList errors;
 

@@ -405,61 +405,6 @@ class TotalDistance : public RideMetric {
 static bool totalDistanceAdded =
     RideMetricFactory::instance().addMetric(TotalDistance());
 
-// DistanceSwim is TotalDistance in swim units, relevant for swims in yards //
-class DistanceSwim : public RideMetric {
-    Q_DECLARE_TR_FUNCTIONS(DistanceSwim)
-    double mts;
-
-    public:
-
-    DistanceSwim() : mts(0.0)
-    {
-        setSymbol("distance_swim");
-        setInternalName("Distance Swim");
-    }
-    // Overrides to use Swim Pace units setting
-    QString units(bool) const {
-        bool metricSwPace = appsettings->value(NULL, GC_SWIMPACE, true).toBool();
-        return RideMetric::units(metricSwPace);
-    }
-    double value(bool) const {
-        bool metricSwPace = appsettings->value(NULL, GC_SWIMPACE, true).toBool();
-        return RideMetric::value(metricSwPace);
-    }
-    void initialize() {
-        setName(tr("Distance Swim"));
-        setType(RideMetric::Total);
-        setMetricUnits(tr("m"));
-        setImperialUnits(tr("yd"));
-        setPrecision(0);
-        setConversion(1.0/METERS_PER_YARD);
-        setDescription(tr("Total Distance in meters or yards"));
-    }
-
-    void compute(RideItem *, Specification, const QHash<QString,RideMetric*> &deps) {
-
-        TotalDistance *distance = dynamic_cast<TotalDistance*>(deps.value("total_distance"));
-
-        // convert to meters
-        mts = distance->value(true) * 1000.0;
-        setValue(mts);
-        setCount(distance->count());
-    }
-
-    bool isRelevantForRide(const RideItem *ride) const { return ride->isSwim; }
-
-    RideMetric *clone() const { return new DistanceSwim(*this); }
-};
-
-static bool addDistanceSwim()
-{
-    QVector<QString> deps;
-    deps.append("total_distance");
-    RideMetricFactory::instance().addMetric(DistanceSwim(), &deps);
-    return true;
-}
-static bool distanceSwimAdded = addDistanceSwim();
-
 // climb rating is essentially elev gain ^2 / distance
 // a concept raised by Dan Conelly on his blog
 class ClimbRating : public RideMetric {
@@ -531,7 +476,7 @@ class AthleteWeight : public RideMetric {
         setImperialUnits(tr("lbs"));
         setPrecision(2);
         setConversion(LB_PER_KG);
-        setDescription(tr("Weight in kg or lbs: first from Withings data, then from Activity metadaa and last from Athlete configuration with 75kg default"));
+        setDescription(tr("Weight in kg or lbs: first from Withings data, then from Activity metadata and last from Athlete configuration with 75kg default"));
     }
 
     void compute(RideItem *item, Specification, const QHash<QString,RideMetric*> &) {
@@ -913,140 +858,6 @@ static bool avgSpeedAdded =
         AvgSpeed(), &(QVector<QString>() << "total_distance" << "workout_time"));
 
 //////////////////////////////////////////////////////////////////////////////
-class Pace : public RideMetric {
-    Q_DECLARE_TR_FUNCTIONS(Pace)
-    double pace;
-
-    public:
-
-    Pace() : pace(0.0)
-    {
-        setSymbol("pace");
-        setInternalName("Pace");
-    }
-
-    // Pace ordering is reversed
-    bool isLowerBetter() const { return true; }
-
-    // Overrides to use Pace units setting
-    QString units(bool) const {
-        bool metricRunPace = appsettings->value(NULL, GC_PACE, true).toBool();
-        return RideMetric::units(metricRunPace);
-    }
-
-    double value(bool) const {
-        bool metricRunPace = appsettings->value(NULL, GC_PACE, true).toBool();
-        return RideMetric::value(metricRunPace);
-    }
-
-    QString toString(bool metric) const {
-        return time_to_string(value(metric)*60);
-    }
-
-    void initialize() {
-        setName(tr("Pace"));
-        setType(RideMetric::Average);
-        setMetricUnits(tr("min/km"));
-        setImperialUnits(tr("min/mile"));
-        setPrecision(1);
-        setConversion(KM_PER_MILE);
-        setDescription(tr("Average Speed expressed in pace units: min/km or min/mile"));
-   }
-
-    void compute(RideItem *, Specification, const QHash<QString,RideMetric*> &deps) {
-
-        AvgSpeed *as = dynamic_cast<AvgSpeed*>(deps.value("average_speed"));
-
-        // divide by zero or stupidly low pace
-        if (as->value(true) > 0.00f) pace = 60.0f / as->value(true);
-        else pace = 0;
-
-        setValue(pace);
-        setCount(as->count());
-    }
-
-    bool isRelevantForRide(const RideItem *ride) const { return !ride->isSwim; }
-
-    RideMetric *clone() const { return new Pace(*this); }
-};
-
-static bool addPace()
-{
-    QVector<QString> deps;
-    deps.append("average_speed");
-    RideMetricFactory::instance().addMetric(Pace(), &deps);
-    return true;
-}
-static bool paceAdded = addPace();
-
-//////////////////////////////////////////////////////////////////////////////
-class PaceSwim : public RideMetric {
-    Q_DECLARE_TR_FUNCTIONS(PaceSwim)
-    double pace;
-
-    public:
-
-    PaceSwim() : pace(0.0)
-    {
-        setSymbol("pace_swim");
-        setInternalName("Pace Swim");
-    }
-
-    // Swim Pace ordering is reversed
-    bool isLowerBetter() const { return true; }
-
-    // Overrides to use Swim Pace units setting
-    QString units(bool) const {
-        bool metricRunPace = appsettings->value(NULL, GC_SWIMPACE, true).toBool();
-        return RideMetric::units(metricRunPace);
-    }
-
-    double value(bool) const {
-        bool metricRunPace = appsettings->value(NULL, GC_SWIMPACE, true).toBool();
-        return RideMetric::value(metricRunPace);
-    }
-
-    QString toString(bool metric) const {
-        return time_to_string(value(metric)*60);
-    }
-
-    void initialize() {
-        setName(tr("Pace Swim"));
-        setType(RideMetric::Average);
-        setMetricUnits(tr("min/100m"));
-        setImperialUnits(tr("min/100yd"));
-        setPrecision(1);
-        setConversion(METERS_PER_YARD);
-        setDescription(tr("Average Speed expressed in swim pace units: min/100m or min/100yd"));
-   }
-
-    void compute(RideItem *, Specification, const QHash<QString,RideMetric*> &deps) {
-
-        AvgSpeed *as = dynamic_cast<AvgSpeed*>(deps.value("average_speed"));
-
-        // divide by zero or stupidly low pace
-        if (as->value(true) > 0.00f) pace = 6.0f / as->value(true);
-        else pace = 0;
-
-        setValue(pace);
-        setCount(as->count());
-    }
-
-    bool isRelevantForRide(const RideItem *ride) const { return ride->isSwim; }
-
-    RideMetric *clone() const { return new PaceSwim(*this); }
-};
-
-static bool addPaceSwim()
-{
-    QVector<QString> deps;
-    deps.append("average_speed");
-    RideMetricFactory::instance().addMetric(PaceSwim(), &deps);
-    return true;
-}
-static bool paceSwimAdded = addPaceSwim();
-
-//////////////////////////////////////////////////////////////////////////////
 
 struct AvgPower : public RideMetric {
     Q_DECLARE_TR_FUNCTIONS(AvgPower)
@@ -1138,7 +949,7 @@ struct AvgSmO2 : public RideMetric {
         while (it.hasNext()) {
             struct RideFilePoint *point = it.next();
 
-            if (point->smo2 >= 0.0) {
+            if (point->smo2 > 0.0f) {  // SmO2 should always be > 0.0f
                 total += point->smo2;
                 ++count;
             }
@@ -1186,17 +997,17 @@ struct AvgtHb : public RideMetric {
             return;
         }
 
-        total = count = 0;
+        total = count = 0.0f;
 
         RideFileIterator it(item->ride(), spec);
         while (it.hasNext()) {
             struct RideFilePoint *point = it.next();
-            if (point->thb >= 0.0) {
+            if (point->thb > 0.0f) {
                 total += point->thb;
                 ++count;
             }
         }
-        setValue(count > 0 ? total / count : 0);
+        setValue(count > 0.0f ? total / count : 0.0f);
         setCount(count);
     }
 
@@ -1228,7 +1039,7 @@ struct AAvgPower : public RideMetric {
         setMetricUnits(tr("watts"));
         setImperialUnits(tr("watts"));
         setType(RideMetric::Average);
-        setDescription(tr("Average altitude power. Recorded power ajusted to take into account the effect of altitude on vo2max and thus power output."));
+        setDescription(tr("Average altitude power. Recorded power adjusted to take into account the effect of altitude on vo2max and thus power output."));
     }
 
     void compute(RideItem *item, Specification spec, const QHash<QString,RideMetric*> &) {
@@ -1751,7 +1562,7 @@ struct AvgCadence : public RideMetric {
         setCount(count);
     }
 
-    bool isRelevantForRide(const RideItem *ride) const { return ride->present.contains("C"); }
+    bool isRelevantForRide(const RideItem *ride) const { return ride->present.contains("C") && !ride->isRun; }
 
     RideMetric *clone() const { return new AvgCadence(*this); }
 };
@@ -1989,12 +1800,17 @@ class MinSmO2 : public RideMetric {
             return;
         }
 
+        bool notset = true;
+
         RideFileIterator it(item->ride(), spec);
         while (it.hasNext()) {
             struct RideFilePoint *point = it.next();
 
-            if (point->smo2 > 0 && point->smo2 >= min)
+            if (point->smo2 >= 0.0f && (notset || point->smo2 < min)) {
                 min = point->smo2;
+                if (point->smo2 > 0.0f && notset)
+                  notset = false;
+            }
         }
         setValue(min);
     }
@@ -2033,11 +1849,15 @@ class MintHb : public RideMetric {
             return;
         }
 
+        bool notset = true;
+
         RideFileIterator it(item->ride(), spec);
         while (it.hasNext()) {
             struct RideFilePoint *point = it.next();
-            if (point->thb > 0 && point->thb >= min)
+            if (point->thb > 0.0f && (notset || point->thb < min)) {
                 min = point->thb;
+                notset = false;
+            }
         }
         setValue(min);
     }
@@ -2284,7 +2104,7 @@ class MaxCadence : public RideMetric {
         setValue(max);
     }
 
-    bool isRelevantForRide(const RideItem *ride) const { return ride->present.contains("C"); }
+    bool isRelevantForRide(const RideItem *ride) const { return ride->present.contains("C") && !ride->isRun; }
 
     RideMetric *clone() const { return new MaxCadence(*this); }
 };
@@ -2312,7 +2132,7 @@ class MaxTemp : public RideMetric {
         setPrecision(1);
         setConversion(FAHRENHEIT_PER_CENTIGRADE);
         setConversionSum(FAHRENHEIT_ADD_CENTIGRADE);
-        setDescription(tr("Maximum Cadence"));
+        setDescription(tr("Maximum Temperature"));
     }
 
     // override to special case NA
